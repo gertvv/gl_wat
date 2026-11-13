@@ -63,32 +63,55 @@ pub fn str_lexer_test() {
   assert_lex_self_as(l, "\"\\5c\\00\"", w.String)
 }
 
-pub fn parse_func_test() {
-  let l = w.lexer()
-  let p = w.func_parser()
+pub fn parse_func(str) {
+  let assert Ok(tokens) = lexer.run(str, w.lexer())
+  nibble.run(tokens, w.func_parser())
+}
 
-  let assert Ok(tokens) = lexer.run("(func)", l)
-  let assert Ok(w.Func([])) = nibble.run(tokens, p)
+pub fn parse_func_empty_test() {
+  let assert Ok(w.Func(None, [], [])) = parse_func("(func)")
+}
 
-  let assert Ok(tokens) = lexer.run("(type)", l)
-  let assert Error(_) = nibble.run(tokens, p)
+pub fn parse_func_invalid_test() {
+  let assert Error(_) = parse_func("(type)")
+}
 
-  let assert Ok(tokens) = lexer.run("(func (param i32))", l)
-  let assert Ok(w.Func([w.Param(None, w.I32)])) = nibble.run(tokens, p)
+pub fn parse_func_one_param_test() {
+  let assert Ok(w.Func(None, [w.Param(None, w.I32)], [])) =
+    parse_func("(func (param i32))")
+}
 
-  let assert Ok(tokens) = lexer.run("(func (param i32) (param i32))", l)
-  let assert Ok(w.Func([w.Param(None, w.I32), w.Param(None, w.I32)])) =
-    nibble.run(tokens, p)
+pub fn parse_func_two_params_test() {
+  let assert Ok(w.Func(None, [w.Param(None, w.I32), w.Param(None, w.I32)], [])) =
+    parse_func("(func (param i32) (param i32))")
 
-  let assert Ok(tokens) = lexer.run("(func (param f32 f32))", l)
-  let assert Ok(w.Func([w.Param(None, w.F32), w.Param(None, w.F32)])) =
-    nibble.run(tokens, p)
+  let assert Ok(w.Func(None, [w.Param(None, w.F32), w.Param(None, w.F32)], [])) =
+    parse_func("(func (param f32 f32))")
+}
 
-  let assert Ok(tokens) = lexer.run("(func (param $n i64))", l)
-  let assert Ok(w.Func([w.Param(Some("$n"), w.I64)])) = nibble.run(tokens, p)
+pub fn parse_func_param_with_id_test() {
+  let assert Ok(w.Func(None, [w.Param(Some("$n"), w.I64)], [])) =
+    parse_func("(func (param $n i64))")
 
-  let assert Ok(tokens) = lexer.run("(func (param $n i64 i64))", l)
-  let assert Error(_) = nibble.run(tokens, p)
+  let assert Error(_) = parse_func("(func (param $n i64 i64))")
+}
+
+pub fn parse_func_one_result_test() {
+  let assert Ok(w.Func(None, [], [w.F64])) = parse_func("(func (result f64))")
+}
+
+pub fn parse_func_two_results_test() {
+  let assert Ok(w.Func(None, [w.Param(None, w.I32)], [w.F64, w.I32])) =
+    parse_func("(func (param i32) (result f64) (result i32))")
+  let assert Error(_) =
+    parse_func("(func (result f64) (param i32) (result i32))")
+}
+
+pub fn parse_func_with_id_test() {
+  let assert Ok(w.Func(Some("$f"), [], [])) = parse_func("(func $f)")
+
+  let assert Ok(w.Func(Some("$f"), [], [w.I32])) =
+    parse_func("(func $f (result i32))")
 }
 
 fn assert_lex_self_as(l, input, fun) {

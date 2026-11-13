@@ -1,3 +1,4 @@
+import gleam/bool
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/regexp.{type Regexp}
@@ -79,33 +80,118 @@ pub type Param {
 }
 
 pub type Func {
-  Func(params: List(Param))
+  Func(id: Option(String), params: List(Param), results: List(ValueType))
+}
+
+pub type Sexp {
+  FuncExp(Func)
+  ParamExp(List(Param))
+  ResultExp(List(ValueType))
+  TypeExp
+}
+
+pub fn sexp_parser() {
+  use _ <- nibble.do(nibble.token(LParen))
+  use t <- nibble.do(nibble.any())
+  use expr <- nibble.do(case t {
+    Keyword(name) -> {
+      case name {
+        "func" -> {
+          use func <- nibble.do(func_parser_internal())
+          nibble.return(FuncExp(func))
+        }
+        "type" -> {
+          use _ <- nibble.do(type_parser_internal())
+          nibble.return(TypeExp)
+        }
+        _ -> nibble.fail("unexpected keyword")
+      }
+    }
+    _ -> nibble.fail("expected a keyword")
+  })
+  nibble.return(expr)
 }
 
 pub fn func_parser() {
-  use _ <- nibble.do(nibble.token(LParen))
-  use _ <- nibble.do(nibble.token(Keyword("func")))
-  // TOOD: id
-  // TODO: explict func type
-  use params <- nibble.do(nibble.many(param_parser()))
-  use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Func(list.flatten(params)))
+  use exp <- nibble.do(sexp_parser())
+  case exp {
+    FuncExp(func) -> nibble.return(func)
+    _ -> nibble.fail("Expected a func")
+  }
 }
 
-fn param_parser() {
-  use _ <- nibble.do(nibble.token(LParen))
+fn type_parser_internal() {
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(Nil)
+}
+
+type FuncParseContext {
+  ConsumedParam(func: Func)
+  ConsumedResult(func: Func)
+}
+
+fn func_parser_internal() {
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  // TODO: exports
+  // TODO: import
+  // TODO: explict func type
+  use func <- nibble.do({
+    use func <- nibble.loop(ConsumedParam(Func(id, [], [])))
+    nibble.one_of([
+      nibble.token(RParen) |> nibble.replace(nibble.Break(func)),
+      {
+        use _ <- nibble.do(nibble.token(LParen))
+        nibble.one_of([
+          param_parser(func)
+            |> nibble.map(nibble.Continue),
+          result_parser(func)
+            |> nibble.map(nibble.Continue),
+        ])
+      },
+    ])
+  })
+
+  // TODO: locals
+  // TODO: expressions
+  nibble.return(func.func)
+}
+
+fn result_parser(ctx: FuncParseContext) {
+  let func = ctx.func
+  use _ <- nibble.do(nibble.token(Keyword("result")))
+  use types <- nibble.do(nibble.many(value_type_parser()))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(ConsumedResult(
+    Func(..func, results: list.append(func.results, types)),
+  ))
+}
+
+fn param_parser(ctx: FuncParseContext) {
+  use <- bool.guard(
+    case ctx {
+      ConsumedParam(..) -> False
+      ConsumedResult(..) -> True
+    },
+    nibble.fail("param after result"),
+  )
+  let func = ctx.func
   use _ <- nibble.do(nibble.token(Keyword("param")))
+  use params <- nibble.do(param_like_parser(func.params))
+  nibble.return(Func(..func, params:) |> ConsumedParam)
+}
+
+fn param_like_parser(previous: List(Param)) {
   use maybe_id <- nibble.do(nibble.optional(id_parser()))
   case maybe_id {
     Some(id) -> {
       use type_ <- nibble.do(value_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([Param(Some(id), type_)])
+      nibble.return(list.append(previous, [Param(Some(id), type_)]))
     }
     None -> {
       use types <- nibble.do(nibble.many(value_type_parser()))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(list.map(types, Param(None, _)))
+      nibble.return(list.append(previous, list.map(types, Param(None, _))))
     }
   }
 }
