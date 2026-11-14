@@ -69,7 +69,7 @@ pub fn parse_func(str) {
 }
 
 pub fn parse_func_empty_test() {
-  let assert Ok(w.Func(None, [], [])) = parse_func("(func)")
+  let assert Ok(w.Func(None, None, [], [], [])) = parse_func("(func)")
 }
 
 pub fn parse_func_invalid_test() {
@@ -77,41 +77,74 @@ pub fn parse_func_invalid_test() {
 }
 
 pub fn parse_func_one_param_test() {
-  let assert Ok(w.Func(None, [w.Param(None, w.I32)], [])) =
+  let assert Ok(w.Func(params: [w.Param(None, w.I32)], ..)) =
     parse_func("(func (param i32))")
 }
 
 pub fn parse_func_two_params_test() {
-  let assert Ok(w.Func(None, [w.Param(None, w.I32), w.Param(None, w.I32)], [])) =
+  let assert Ok(w.Func(params: [w.Param(None, w.I32), w.Param(None, w.I32)], ..)) =
     parse_func("(func (param i32) (param i32))")
 
-  let assert Ok(w.Func(None, [w.Param(None, w.F32), w.Param(None, w.F32)], [])) =
+  let assert Ok(w.Func(params: [w.Param(None, w.F32), w.Param(None, w.F32)], ..)) =
     parse_func("(func (param f32 f32))")
 }
 
 pub fn parse_func_param_with_id_test() {
-  let assert Ok(w.Func(None, [w.Param(Some("$n"), w.I64)], [])) =
+  let assert Ok(w.Func(params: [w.Param(Some("$n"), w.I64)], ..)) =
     parse_func("(func (param $n i64))")
 
   let assert Error(_) = parse_func("(func (param $n i64 i64))")
 }
 
 pub fn parse_func_one_result_test() {
-  let assert Ok(w.Func(None, [], [w.F64])) = parse_func("(func (result f64))")
+  let assert Ok(w.Func(results: [w.F64], ..)) =
+    parse_func("(func (result f64))")
 }
 
 pub fn parse_func_two_results_test() {
-  let assert Ok(w.Func(None, [w.Param(None, w.I32)], [w.F64, w.I32])) =
-    parse_func("(func (param i32) (result f64) (result i32))")
+  let assert Ok(w.Func(
+    params: [w.Param(None, w.I32)],
+    results: [w.F64, w.I32],
+    ..,
+  )) = parse_func("(func (param i32) (result f64) (result i32))")
   let assert Error(_) =
     parse_func("(func (result f64) (param i32) (result i32))")
 }
 
 pub fn parse_func_with_id_test() {
-  let assert Ok(w.Func(Some("$f"), [], [])) = parse_func("(func $f)")
+  let assert Ok(w.Func(id: Some("$f"), ..)) = parse_func("(func $f)")
 
-  let assert Ok(w.Func(Some("$f"), [], [w.I32])) =
+  let assert Ok(w.Func(id: Some("$f"), results: [w.I32], ..)) =
     parse_func("(func $f (result i32))")
+}
+
+pub fn parse_func_with_local_test() {
+  let assert Ok(w.Func(locals: [w.Param(Some("$i"), w.I32)], ..)) =
+    parse_func("(func (local $i i32))")
+}
+
+pub fn parse_func_with_two_locals_test() {
+  let assert Ok(w.Func(
+    locals: [w.Param(Some("$i"), w.I32), w.Param(Some("$j"), w.I32)],
+    ..,
+  )) = parse_func("(func (local $i i32) (local $j i32))")
+
+  let assert Ok(w.Func(locals: [w.Param(None, w.I32), w.Param(None, w.I32)], ..)) =
+    parse_func("(func (local i32 i32))")
+
+  let assert Error(_) = parse_func("(func (local $i i32 i32))")
+}
+
+pub fn parse_func_with_type_test() {
+  let assert Ok(w.Func(type_: Some(w.IndexInt("3")), ..)) =
+    parse_func("(func (type 3))")
+
+  let assert Ok(w.Func(type_: Some(w.IndexId("$ft")), ..)) =
+    parse_func("(func (type $ft))")
+
+  let assert Error(_) = parse_func("(func (type 3 4))")
+  let assert Error(_) = parse_func("(func (param i32) (type 3))")
+  let assert Error(_) = parse_func("(func (type $ft) (type 3))")
 }
 
 fn assert_lex_self_as(l, input, fun) {
