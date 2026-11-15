@@ -338,44 +338,56 @@ fn func_parser_internal() {
   use id <- nibble.do(id_parser() |> nibble.optional)
   // TODO: exports
   // TODO: import
-  use #(_, func) <- nibble.do({
-    use ctx <- nibble.loop(#(0, Func(id, None, [], [], [], [])))
-    nibble.one_of([
-      nibble.token(RParen) |> nibble.replace(nibble.Break(ctx)),
-      {
-        use _ <- nibble.do(nibble.token(LParen))
-        nibble.one_of([
-          staged_optional(func_type_parser, ctx, 1)
-            |> nibble.map(nibble.Continue),
-          staged_many(param_parser, ctx, 2)
-            |> nibble.map(nibble.Continue),
-          staged_many(result_parser, ctx, 3)
-            |> nibble.map(nibble.Continue),
-          staged_many(local_parser, ctx, 4)
-            |> nibble.map(nibble.Continue),
-          staged_many(func_folded_expr_parser, ctx, 5)
-            |> nibble.map(nibble.Continue),
-        ])
-      },
-      staged_many(func_flat_expr_parser, ctx, 5) |> nibble.map(nibble.Continue),
-    ])
-  })
-  nibble.return(func)
+  use #(stage, func) <- nibble.loop(#(0, Func(id, None, [], [], [], [])))
+  nibble.one_of([
+    nibble.token(RParen) |> nibble.replace(nibble.Break(func)),
+    {
+      use _ <- nibble.do(nibble.token(LParen))
+      nibble.one_of([
+        staged_optional(func_type_parser(func, update_func_type), stage, 1)
+          |> nibble.map(nibble.Continue),
+        staged_many(param_parser(func, append_func_params), stage, 2)
+          |> nibble.map(nibble.Continue),
+        staged_many(result_parser(func, append_func_results), stage, 3)
+          |> nibble.map(nibble.Continue),
+        staged_many(local_parser(func, append_func_locals), stage, 4)
+          |> nibble.map(nibble.Continue),
+        staged_many(func_folded_expr_parser(func), stage, 5)
+          |> nibble.map(nibble.Continue),
+      ])
+    },
+    staged_many(func_flat_expr_parser(func), stage, 5)
+      |> nibble.map(nibble.Continue),
+  ])
 }
 
-fn staged_optional(parser, ctx, n) {
-  let #(m, ctx) = ctx
+fn update_func_type(func: Func, type_: Option(Index)) -> Func {
+  Func(..func, type_:)
+}
+
+fn append_func_params(func: Func, params: List(Param)) -> Func {
+  Func(..func, params: list.append(func.params, params))
+}
+
+fn append_func_results(func: Func, results: List(ValueType)) -> Func {
+  Func(..func, results: list.append(func.results, results))
+}
+
+fn append_func_locals(func: Func, locals: List(Param)) -> Func {
+  Func(..func, locals: list.append(func.locals, locals))
+}
+
+fn staged_optional(parser, m, n) {
   use <- bool.guard(n <= m, nibble.fail("out-of-place"))
 
-  use ctx <- nibble.do(parser(ctx))
+  use ctx <- nibble.do(parser)
   nibble.return(#(n, ctx))
 }
 
-fn staged_many(parser, ctx, n) {
-  let #(m, ctx) = ctx
+fn staged_many(parser, m, n) {
   use <- bool.guard(n < m, nibble.fail("out-of-place"))
 
-  use ctx <- nibble.do(parser(ctx))
+  use ctx <- nibble.do(parser)
   nibble.return(#(n, ctx))
 }
 
@@ -466,23 +478,23 @@ fn folded_block_parser(
 
 fn block_type_parser() {
   // treat block as a special case of func
-  use #(_, func) <- nibble.do({
-    use ctx <- nibble.loop(#(0, Func(None, None, [], [], [], [])))
+  use func <- nibble.do({
+    use #(stage, func) <- nibble.loop(#(0, Func(None, None, [], [], [], [])))
     use maybe <- nibble.do(nibble.token(LParen) |> nibble.optional)
-    use <- bool.guard(maybe == None, nibble.return(nibble.Break(ctx)))
+    use <- bool.guard(maybe == None, nibble.return(nibble.Break(func)))
     use maybe_ctx <- nibble.do(
       nibble.one_of([
-        staged_many(func_type_parser, ctx, 1),
-        staged_many(param_parser, ctx, 2),
-        staged_many(result_parser, ctx, 3),
-        staged_many(func_folded_expr_parser, ctx, 4),
+        staged_many(func_type_parser(func, update_func_type), stage, 1),
+        staged_many(param_parser(func, append_func_params), stage, 2),
+        staged_many(result_parser(func, append_func_results), stage, 3),
+        staged_many(func_folded_expr_parser(func), stage, 4),
       ])
       |> nibble.optional,
     )
     case maybe_ctx {
-      Some(#(4, _) as ctx) -> nibble.Break(ctx)
+      Some(#(4, func)) -> nibble.Break(func)
       Some(ctx) -> nibble.Continue(ctx)
-      None -> nibble.Break(ctx)
+      None -> nibble.Break(func)
     }
     |> nibble.return
   })
@@ -706,11 +718,14 @@ fn keyword() -> nibble.Parser(String, Token, a) {
   }
 }
 
-fn func_type_parser(func: Func) -> nibble.Parser(Func, Token, a) {
+fn func_type_parser(
+  ctx: context,
+  update: fn(context, Option(Index)) -> context,
+) -> nibble.Parser(context, Token, a) {
   use _ <- nibble.do(nibble.token(Keyword("type")))
   use type_use <- nibble.do(index_parser())
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Func(..func, type_: Some(type_use)))
+  nibble.return(update(ctx, Some(type_use)))
 }
 
 fn int_parser() -> nibble.Parser(String, Token, a) {
@@ -721,37 +736,43 @@ fn int_parser() -> nibble.Parser(String, Token, a) {
   }
 }
 
-fn param_parser(func: Func) {
+fn param_parser(ctx: context, update: fn(context, List(Param)) -> context) {
   use _ <- nibble.do(nibble.token(Keyword("param")))
-  use params <- nibble.do(param_like_parser(func.params))
-  nibble.return(Func(..func, params:))
+  use params <- nibble.do(param_like_parser())
+  nibble.return(update(ctx, params))
 }
 
-fn result_parser(func: Func) {
+fn result_parser(
+  ctx: context,
+  update: fn(context, List(ValueType)) -> context,
+) {
   use _ <- nibble.do(nibble.token(Keyword("result")))
   use types <- nibble.do(nibble.many(value_type_parser()))
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Func(..func, results: list.append(func.results, types)))
+  nibble.return(update(ctx, types))
 }
 
-fn local_parser(func: Func) -> nibble.Parser(Func, Token, a) {
+fn local_parser(
+  ctx: context,
+  update: fn(context, List(Param)) -> context,
+) -> nibble.Parser(context, Token, a) {
   use _ <- nibble.do(nibble.token(Keyword("local")))
-  use locals <- nibble.do(param_like_parser(func.locals))
-  nibble.return(Func(..func, locals:))
+  use locals <- nibble.do(param_like_parser())
+  nibble.return(update(ctx, locals))
 }
 
-fn param_like_parser(previous: List(Param)) {
+fn param_like_parser() {
   use maybe_id <- nibble.do(nibble.optional(id_parser()))
   case maybe_id {
     Some(id) -> {
       use type_ <- nibble.do(value_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(list.append(previous, [Param(Some(id), type_)]))
+      nibble.return([Param(Some(id), type_)])
     }
     None -> {
       use types <- nibble.do(nibble.many(value_type_parser()))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(list.append(previous, list.map(types, Param(None, _))))
+      nibble.return(list.map(types, Param(None, _)))
     }
   }
 }
