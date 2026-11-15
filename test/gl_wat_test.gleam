@@ -299,6 +299,19 @@ pub fn if_else_flat_test() {
     )
 }
 
+pub fn br_on_cast_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.BranchOnCast(
+        w.IndexInt("1"),
+        w.Nullable(w.HeapAny),
+        w.Nullable(w.HeapIndex(w.IndexInt("0"))),
+      ),
+    ],
+    ..,
+  )) = parse_func("(func br_on_cast 1 anyref (ref null 0))")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

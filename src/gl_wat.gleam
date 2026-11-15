@@ -67,6 +67,28 @@ pub type ValueType {
   I64
   F32
   F64
+  Ref(RefType)
+}
+
+pub type HeapType {
+  HeapAny
+  HeapEq
+  HeapI31
+  HeapStruct
+  HeapArray
+  HeapNone
+  HeapFunc
+  HeapNoFunc
+  // TODO: exn, noexn
+  HeapExtern
+  HeapNoExtern
+  // TODO: call this TypeUse?
+  HeapIndex(Index)
+}
+
+pub type RefType {
+  NonNull(heap_type: HeapType)
+  Nullable(heap_type: HeapType)
 }
 
 pub type Param {
@@ -106,10 +128,6 @@ type IfElseState {
   )
 }
 
-pub type HeapType
-
-pub type RefType
-
 pub type Instruction {
   // Control instructions
   Unreachable
@@ -122,21 +140,32 @@ pub type Instruction {
   // TODO: exceptions
   Branch(label_index: Index)
   BranchIf(label_index: Index)
-  // TODO: BranchTable
+  BranchTable(label_indices: List(Index), default_label_index: Index)
   Return
   Call(function_index: Index)
-  // TODO: CallIndirect
+  CallIndirect(
+    table_index: Index,
+    type_: Option(Index),
+    params: List(ValueType),
+    results: List(ValueType),
+  )
   ReturnCall(function_index: Index)
-  // TODO: ReturnCallIndirect
+  ReturnCallIndirect(
+    table_index: Index,
+    type_: Option(Index),
+    params: List(ValueType),
+    results: List(ValueType),
+  )
   CallRef(type_index: Index)
   ReturnCallRef(type_index: Index)
-  @deprecated("Use BranchOnNull instead")
-  BreakOnNull(label_index: Index)
   BranchOnNull(label_index: Index)
-  @deprecated("Use BranchOnNonNull instead")
-  BreakOnNonNull(label_index: Index)
   BranchOnNonNull(label_index: Index)
-  // TODO: BranchOnCast*
+  BranchOnCast(label_index: Index, from_ref_type: RefType, to_ref_type: RefType)
+  BranchOnCastFail(
+    label_index: Index,
+    from_ref_type: RefType,
+    to_ref_type: RefType,
+  )
   //
   // Reference instructions
   RefNull(heap_type: HeapType)
@@ -262,6 +291,8 @@ pub type Instruction {
   I32CntLZ
   I32CntTZ
   I32PopCnt
+  I32Extend8S
+  I32Extend16S
   I32Add
   I32Sub
   I32Mul
@@ -274,12 +305,15 @@ pub type Instruction {
   I32Xor
   I32ShL
   I32ShRS
-  I32ShLU
+  I32ShRU
   I32RotL
   I32RotR
   I64CntLZ
   I64CntTZ
   I64PopCnt
+  I64Extend8S
+  I64Extend16S
+  I64Extend32S
   I64Add
   I64Sub
   I64Mul
@@ -292,7 +326,7 @@ pub type Instruction {
   I64Xor
   I64ShL
   I64ShRS
-  I64ShLU
+  I64ShRU
   I64RotL
   I64RotR
   F32Abs
@@ -604,10 +638,27 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     // TODO: try/catch
     "br" -> one_arg_parser(index_parser(), Branch)
     "br_if" -> one_arg_parser(index_parser(), BranchIf)
-    "br_table" -> todo
+    "br_table" -> {
+      use labels <- nibble.do(nibble.many1(index_parser()))
+      let assert [default, ..labels] = list.reverse(labels)
+      let labels = list.reverse(labels)
+      nibble.return(BranchTable(labels, default))
+    }
     "br_on_null" -> one_arg_parser(index_parser(), BranchOnNull)
-    "br_on_cast" -> todo
-    "br_on_cast_fail" -> todo
+    "br_on_cast" ->
+      three_arg_parser(
+        index_parser(),
+        ref_type_parser(),
+        ref_type_parser(),
+        BranchOnCast,
+      )
+    "br_on_cast_fail" ->
+      three_arg_parser(
+        index_parser(),
+        ref_type_parser(),
+        ref_type_parser(),
+        BranchOnCastFail,
+      )
     "call" -> one_arg_parser(index_parser(), Call)
     "call_ref" -> one_arg_parser(index_parser(), CallRef)
     "call_indirect" -> todo
@@ -638,7 +689,15 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
         two_arg_parser(index_parser(), index_parser(), TableCopy),
         r(TableCopy(IndexInt("0"), IndexInt("0"))),
       ])
-    "table.init" -> todo
+    "table.init" -> {
+      use idx1 <- nibble.do(index_parser())
+      use idx2 <- nibble.do(index_parser() |> nibble.optional)
+      case idx2 {
+        Some(idx2) -> TableInit(idx1, idx2)
+        None -> TableInit(IndexInt("0"), idx1)
+      }
+      |> nibble.return
+    }
     "elem.drop" ->
       one_arg_parser_optional(index_parser(), IndexInt("0"), ElemDrop)
     // TODO: memory instructions
@@ -646,8 +705,8 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     // numeric instructions
     "i32.const" -> one_arg_parser(int_parser(), I32Const)
     "i64.const" -> one_arg_parser(int_parser(), I64Const)
-    "f32.const" -> todo
-    "f64.const" -> todo
+    "f32.const" -> one_arg_parser(float_parser(), F32Const)
+    "f64.const" -> one_arg_parser(float_parser(), F64Const)
     "i32.eqz" -> r(I32EqZ)
     "i32.eq" -> r(I32Eq)
     "i32.ne" -> r(I32NE)
@@ -662,8 +721,8 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "i32.clz" -> r(I32CntLZ)
     "i32.ctz" -> r(I32CntTZ)
     "i32.popcnt" -> r(I32PopCnt)
-    "i32.extend8_s" -> todo
-    "i32.extend16_s" -> todo
+    "i32.extend8_s" -> r(I32Extend8S)
+    "i32.extend16_s" -> r(I32Extend16S)
     "i32.add" -> r(I32Add)
     "i32.sub" -> r(I32Sub)
     "i32.mul" -> r(I32Mul)
@@ -676,7 +735,7 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "i32.xor" -> r(I32Xor)
     "i32.shl" -> r(I32ShL)
     "i32.shr_s" -> r(I32ShRS)
-    "i32.shr_u" -> todo
+    "i32.shr_u" -> r(I32ShRU)
     "i32.rotl" -> r(I32RotL)
     "i32.rotr" -> r(I32RotR)
     "i64.eqz" -> r(I64EqZ)
@@ -693,9 +752,9 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "i64.clz" -> r(I64CntLZ)
     "i64.ctz" -> r(I64CntTZ)
     "i64.popcnt" -> r(I64PopCnt)
-    "i64.extend8_s" -> todo
-    "i64.extend16_s" -> todo
-    "i64.extend32_s" -> todo
+    "i64.extend8_s" -> r(I64Extend8S)
+    "i64.extend16_s" -> r(I64Extend16S)
+    "i64.extend32_s" -> r(I64Extend32S)
     "i64.add" -> r(I64Add)
     "i64.sub" -> r(I64Sub)
     "i64.mul" -> r(I64Mul)
@@ -708,7 +767,7 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "i64.xor" -> r(I64Xor)
     "i64.shl" -> r(I64ShL)
     "i64.shr_s" -> r(I64ShRS)
-    "i64.shr_u" -> todo
+    "i64.shr_u" -> r(I64ShRU)
     "i64.rotl" -> r(I64RotL)
     "i64.rotr" -> r(I64RotR)
     "f32.eq" -> r(F32Eq)
@@ -768,6 +827,13 @@ fn two_arg_parser(arg1, arg2, constr) {
   nibble.return(constr(arg1, arg2))
 }
 
+fn three_arg_parser(arg1, arg2, arg3, constr) {
+  use arg1 <- nibble.do(arg1)
+  use arg2 <- nibble.do(arg2)
+  use arg3 <- nibble.do(arg3)
+  nibble.return(constr(arg1, arg2, arg3))
+}
+
 fn one_arg_parser_optional(arg1, def1, constr) {
   use arg1 <- nibble.do(nibble.optional(arg1))
   let arg1 = option.unwrap(arg1, def1)
@@ -804,6 +870,14 @@ fn int_parser() -> nibble.Parser(String, Token, a) {
   case t {
     Integer(str) -> nibble.return(str)
     _ -> nibble.fail("expected an integer")
+  }
+}
+
+fn float_parser() -> nibble.Parser(String, Token, a) {
+  use t <- nibble.do(nibble.any())
+  case t {
+    Float(str) -> nibble.return(str)
+    _ -> nibble.fail("expected a float")
   }
 }
 
@@ -869,4 +943,56 @@ fn value_type_parser() {
       }
     _ -> nibble.fail("expected a keyword")
   }
+}
+
+fn ref_type_parser() -> nibble.Parser(RefType, Token, a) {
+  nibble.one_of([
+    keyword_value_parser("anyref", Nullable(HeapAny)),
+    keyword_value_parser("eqref", Nullable(HeapEq)),
+    keyword_value_parser("i31ref", Nullable(HeapI31)),
+    keyword_value_parser("structref", Nullable(HeapStruct)),
+    keyword_value_parser("arrayref", Nullable(HeapArray)),
+    keyword_value_parser("nullref", Nullable(HeapNone)),
+    keyword_value_parser("funcref", Nullable(HeapFunc)),
+    keyword_value_parser("nullfuncref", Nullable(HeapNoFunc)),
+    keyword_value_parser("externref", Nullable(HeapExtern)),
+    keyword_value_parser("nullexternref", Nullable(HeapNoExtern)),
+    full_ref_type_parser(),
+  ])
+}
+
+fn full_ref_type_parser() {
+  use _ <- nibble.do(nibble.token(LParen))
+  use _ <- nibble.do(nibble.token(Keyword("ref")))
+  use null <- nibble.do(nibble.token(Keyword("null")) |> nibble.optional)
+  use ht <- nibble.do(heap_type_parser())
+  case null {
+    Some(_) -> Nullable(ht)
+    None -> NonNull(ht)
+  }
+  |> nibble.return
+}
+
+fn heap_type_parser() -> nibble.Parser(HeapType, Token, a) {
+  nibble.one_of([
+    keyword_value_parser("any", HeapAny),
+    keyword_value_parser("eq", HeapEq),
+    keyword_value_parser("i31", HeapI31),
+    keyword_value_parser("struct", HeapStruct),
+    keyword_value_parser("array", HeapArray),
+    keyword_value_parser("none", HeapNone),
+    keyword_value_parser("func", HeapFunc),
+    keyword_value_parser("nofunc", HeapNoFunc),
+    keyword_value_parser("extern", HeapExtern),
+    keyword_value_parser("noextern", HeapNoExtern),
+    index_parser() |> nibble.map(HeapIndex),
+  ])
+}
+
+fn keyword_value_parser(
+  keyword: String,
+  value: v,
+) -> nibble.Parser(v, Token, a) {
+  use _ <- nibble.do(nibble.token(Keyword(keyword)))
+  nibble.return(value)
 }
