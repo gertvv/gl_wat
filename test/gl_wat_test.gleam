@@ -259,6 +259,23 @@ pub fn parse_block_unfolded_test() {
   )) = parse_func("(func block (result i32) i32.const 3 drop end)")
 }
 
+pub fn if_else_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.I32Const("0"),
+      w.If(None, w.BlockResult(w.I32)),
+      w.I32Const("1"),
+      w.Else(None),
+      w.I32Const("2"),
+      w.End(None),
+    ],
+    ..,
+  )) =
+    parse_func(
+      "(func (if (result i32) (i32.const 0) (then (i32.const 1)) (else (i32.const 2))))",
+    )
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

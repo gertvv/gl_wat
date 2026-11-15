@@ -18,12 +18,6 @@ pub type Token {
 
 const idchar = "[0-9A-Za-z!#$%&'*+-\\./:<=>?@\\^_`|~]"
 
-pub fn main() {
-  let lexer = lexer()
-
-  echo lexer.run("0$x", lexer)
-}
-
 pub fn lexer() {
   let assert Ok(int_re) =
     regexp.from_string(
@@ -98,6 +92,18 @@ pub type BlockType {
   )
   BlockResult(ValueType)
   BlockEmpty
+}
+
+type IfElseState {
+  IfElseState(
+    label: Option(String),
+    type_: Option(Index),
+    params: List(Param),
+    results: List(ValueType),
+    args: List(Instruction),
+    then: List(Instruction),
+    else_: List(Instruction),
+  )
 }
 
 pub type HeapType
@@ -352,7 +358,7 @@ fn func_parser_internal() {
           |> nibble.map(nibble.Continue),
         staged_many(local_parser(func, append_func_locals), stage, 4)
           |> nibble.map(nibble.Continue),
-        staged_many(func_folded_expr_parser(func), stage, 5)
+        staged_many(folded_expr_parser(func, append_func_expr), stage, 5)
           |> nibble.map(nibble.Continue),
       ])
     },
@@ -377,6 +383,10 @@ fn append_func_locals(func: Func, locals: List(Param)) -> Func {
   Func(..func, locals: list.append(func.locals, locals))
 }
 
+fn append_func_expr(func: Func, expr: List(Instruction)) -> Func {
+  Func(..func, expr: list.append(func.expr, expr))
+}
+
 fn staged_optional(parser, m, n) {
   use <- bool.guard(n <= m, nibble.fail("out-of-place"))
 
@@ -391,9 +401,12 @@ fn staged_many(parser, m, n) {
   nibble.return(#(n, ctx))
 }
 
-fn func_folded_expr_parser(func: Func) -> nibble.Parser(Func, Token, a) {
+fn folded_expr_parser(
+  ctx: context,
+  update: fn(context, List(Instruction)) -> context,
+) -> nibble.Parser(context, Token, a) {
   use expr <- nibble.do(folded_instr_parser_internal())
-  nibble.return(Func(..func, expr: list.append(func.expr, expr)))
+  nibble.return(update(ctx, expr))
 }
 
 fn instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
@@ -450,19 +463,75 @@ fn folded_instr_parser_internal() {
 fn folded_if_parser(
   label: Option(String),
 ) -> nibble.Parser(List(Instruction), Token, a) {
-  use #(block_type, arg) <- nibble.do(block_type_parser())
-  // TODO: we might already have eaten the then clause...
-  let if_ = If(label:, block_type:)
-  // TODO: this will eat the then clause + only folded instr are allowed
-  use args <- nibble.do(nibble.many(instr_parser()))
-  let args = list.flatten([arg, ..args])
-  use then <- nibble.do(todo)
-  use else_ <- nibble.do(todo |> nibble.optional)
-  let else_ = case else_ {
-    Some(expr) -> [Else(None), ..expr]
-    None -> []
+  use state <- nibble.do({
+    use #(stage, state) <- nibble.loop(#(
+      0,
+      IfElseState(label, None, [], [], [], [], []),
+    ))
+    use maybe <- nibble.do(nibble.token(LParen) |> nibble.optional)
+    use <- bool.guard(maybe == None, nibble.return(nibble.Break(state)))
+    nibble.one_of([
+      staged_many(func_type_parser(state, update_if_else_type), stage, 1),
+      staged_many(param_parser(state, append_if_else_params), stage, 2),
+      staged_many(result_parser(state, append_if_else_results), stage, 3),
+      staged_many(folded_expr_parser(state, append_if_else_args), stage, 4),
+      // TODO: then is not truly optional
+      staged_optional(then_parser(state), stage, 5),
+      staged_optional(else_parser(state), stage, 6),
+    ])
+    |> nibble.map(nibble.Continue)
+  })
+  let block_type = block_type(state.type_, state.params, state.results)
+  let if_ = If(label: state.label, block_type:)
+  let else_ = case state.else_ {
+    [] -> []
+    expr -> [Else(None), ..expr]
   }
-  nibble.return(list.flatten([args, [if_], then, else_, [End(None)]]))
+  nibble.return(
+    list.flatten([state.args, [if_], state.then, else_, [End(None)]]),
+  )
+}
+
+fn then_parser(state: IfElseState) -> nibble.Parser(IfElseState, Token, a) {
+  use _ <- nibble.do(nibble.token(Keyword("then")))
+  use instr <- nibble.do(nibble.many(instr_parser()))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(IfElseState(..state, then: list.flatten(instr)))
+}
+
+fn else_parser(state: IfElseState) -> nibble.Parser(IfElseState, Token, a) {
+  use _ <- nibble.do(nibble.token(Keyword("else")))
+  use instr <- nibble.do(nibble.many(instr_parser()))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(IfElseState(..state, else_: list.flatten(instr)))
+}
+
+fn update_if_else_type(
+  state: IfElseState,
+  type_: Option(Index),
+) -> IfElseState {
+  IfElseState(..state, type_:)
+}
+
+fn append_if_else_params(
+  state: IfElseState,
+  params: List(Param),
+) -> IfElseState {
+  IfElseState(..state, params: list.append(state.params, params))
+}
+
+fn append_if_else_results(
+  state: IfElseState,
+  results: List(ValueType),
+) -> IfElseState {
+  IfElseState(..state, results: list.append(state.results, results))
+}
+
+fn append_if_else_args(
+  state: IfElseState,
+  args: List(Instruction),
+) -> IfElseState {
+  IfElseState(..state, args: list.append(state.args, args))
 }
 
 fn folded_block_parser(
@@ -487,7 +556,7 @@ fn block_type_parser() {
         staged_many(func_type_parser(func, update_func_type), stage, 1),
         staged_many(param_parser(func, append_func_params), stage, 2),
         staged_many(result_parser(func, append_func_results), stage, 3),
-        staged_many(func_folded_expr_parser(func), stage, 4),
+        staged_many(folded_expr_parser(func, append_func_expr), stage, 4),
       ])
       |> nibble.optional,
     )
@@ -498,19 +567,19 @@ fn block_type_parser() {
     }
     |> nibble.return
   })
-  // map the func type to the appropriate block type
-  case func {
-    Func(type_: None, params: [], results: [], expr:, ..) -> #(BlockEmpty, expr)
-    Func(type_: None, params: [], results: [result], expr:, ..) -> #(
-      BlockResult(result),
-      expr,
-    )
-    Func(type_:, params:, results:, expr:, ..) -> #(
-      BlockTypeUse(type_:, params:, results:),
-      expr,
-    )
+  nibble.return(#(block_type(func.type_, func.params, func.results), func.expr))
+}
+
+fn block_type(
+  type_: Option(Index),
+  params: List(Param),
+  results: List(ValueType),
+) -> BlockType {
+  case type_, params, results {
+    None, [], [] -> BlockEmpty
+    None, [], [result] -> BlockResult(result)
+    _, _, _ -> BlockTypeUse(type_:, params:, results:)
   }
-  |> nibble.return
 }
 
 fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
