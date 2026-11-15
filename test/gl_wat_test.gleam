@@ -276,6 +276,29 @@ pub fn if_else_test() {
     )
 }
 
+pub fn if_no_else_test() {
+  let assert Ok(w.Func(
+    expr: [w.If(None, w.BlockEmpty), w.Unreachable, w.End(None)],
+    ..,
+  )) = parse_func("(func (if (then (unreachable))))")
+}
+
+pub fn if_else_flat_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.If(Some("$a"), w.BlockResult(w.I32)),
+      w.I32Const("3"),
+      w.Else(Some("$a")),
+      w.I32Const("4"),
+      w.End(Some("$a")),
+    ],
+    ..,
+  )) =
+    parse_func(
+      "(func if $a (result i32) (i32.const 3) else $a i32.const 4 end $a)",
+    )
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

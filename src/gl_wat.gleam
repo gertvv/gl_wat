@@ -582,6 +582,8 @@ fn block_type(
   }
 }
 
+/// Parses instructions at a basic level. Independent of folded or flat,
+/// so never consumes a closing RParen.
 fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
   use name <- nibble.do(keyword())
   let r = nibble.return
