@@ -69,7 +69,7 @@ pub fn parse_func(str) {
 }
 
 pub fn parse_func_empty_test() {
-  let assert Ok(w.Func(None, None, [], [], [])) = parse_func("(func)")
+  let assert Ok(w.Func(None, None, [], [], [], [])) = parse_func("(func)")
 }
 
 pub fn parse_func_invalid_test() {
@@ -145,6 +145,118 @@ pub fn parse_func_with_type_test() {
   let assert Error(_) = parse_func("(func (type 3 4))")
   let assert Error(_) = parse_func("(func (param i32) (type 3))")
   let assert Error(_) = parse_func("(func (type $ft) (type 3))")
+}
+
+pub fn parse_func_single_instr_test() {
+  let assert Ok(w.Func(expr: [w.Unreachable], ..)) =
+    parse_func("(func (unreachable))")
+
+  let assert Ok(w.Func(expr: [w.Unreachable], ..)) =
+    parse_func("(func unreachable)")
+}
+
+pub fn parse_func_multiple_instr_test() {
+  let assert Ok(w.Func(expr: [w.Unreachable, w.Unreachable], ..)) =
+    parse_func("(func (unreachable) (unreachable))")
+
+  let assert Ok(w.Func(expr: [w.Unreachable, w.Unreachable], ..)) =
+    parse_func("(func unreachable unreachable)")
+}
+
+pub fn parse_func_instr_immediate_arg_test() {
+  let assert Ok(w.Func(expr: [w.LocalGet(w.IndexId("$n"))], ..)) =
+    parse_func("(func (local.get $n))")
+}
+
+pub fn parse_func_instr_folded_arg_test() {
+  let assert Ok(w.Func(
+    expr: [w.LocalGet(w.IndexId("$m")), w.LocalSet(w.IndexId("$n"))],
+    ..,
+  )) = parse_func("(func (local.set $n (local.get $m)))")
+}
+
+pub fn parse_func_nested_folded_instr_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.I32Const("2"),
+      w.I32Const("3"),
+      w.I32Mul,
+      w.I32Const("5"),
+      w.I32Add,
+    ],
+    ..,
+  )) =
+    parse_func(
+      "(func (i32.add (i32.mul (i32.const 2) (i32.const 3)) (i32.const 5)))",
+    )
+}
+
+pub fn parse_empty_block_test() {
+  let assert Ok(w.Func(expr: [w.Block(None, w.BlockEmpty)], ..)) =
+    parse_func("(func block)")
+}
+
+pub fn parse_block_result_test() {
+  let assert Ok(w.Func(
+    expr: [w.Block(Some("$b"), w.BlockResult(w.I32)), w.End(None)],
+    ..,
+  )) = parse_func("(func (block $b (result i32)))")
+}
+
+pub fn parse_block_multiple_results_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.Block(Some("$b"), w.BlockTypeUse(None, [], [w.I32, w.F32])),
+      w.End(None),
+    ],
+    ..,
+  )) = parse_func("(func (block $b (result i32) (result f32)))")
+}
+
+pub fn parse_block_params_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.Block(
+        Some("$b"),
+        w.BlockTypeUse(
+          None,
+          [w.Param(None, w.I32), w.Param(None, w.I32)],
+          [w.F32],
+        ),
+      ),
+      w.End(None),
+    ],
+    ..,
+  )) = parse_func("(func (block $b (param i32 i32) (result f32)))")
+}
+
+pub fn parse_block_type_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.Block(None, w.BlockTypeUse(Some(w.IndexInt("0")), [], [])),
+      w.End(None),
+    ],
+    ..,
+  )) = parse_func("(func (block (type 0)))")
+}
+
+pub fn parse_block_child_exprs_test() {
+  let assert Ok(w.Func(
+    expr: [w.Block(None, w.BlockEmpty), w.I32Const("3"), w.Drop, w.End(None)],
+    ..,
+  )) = parse_func("(func (block (i32.const 3) drop))")
+}
+
+pub fn parse_block_unfolded_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.Block(None, w.BlockResult(w.I32)),
+      w.I32Const("3"),
+      w.Drop,
+      w.End(None),
+    ],
+    ..,
+  )) = parse_func("(func block (result i32) i32.const 3 drop end)")
 }
 
 fn assert_lex_self_as(l, input, fun) {
