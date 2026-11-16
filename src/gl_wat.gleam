@@ -5,6 +5,9 @@ import gleam/regexp.{type Regexp}
 import nibble
 import nibble/lexer
 
+// TODO: parsing could probably be significantly simplified if the LParen
+// were merged with the following Keyword, so a (result ..) could be distinguished
+// from a (i32.const ..) by just one token.
 pub type Token {
   LParen
   RParen
@@ -175,6 +178,11 @@ pub type Instruction {
   RefEq
   RefTest(ref_type: RefType)
   RefCast(ref_type: RefType)
+  //
+  // Aggregate instructions
+  RefI31
+  I31GetS
+  I31GetU
   StructNew(type_index: Index)
   StructNewDefault(type_index: Index)
   StructGet(type_index: Index, field_index: Index)
@@ -183,9 +191,9 @@ pub type Instruction {
   StructSet(type_index: Index, field_index: Index)
   ArrayNew(type_index: Index)
   ArrayNewDefault(type_index: Index)
-  ArrayNewFixed(type_index: Index, size: Int)
+  ArrayNewFixed(type_index: Index, size: String)
   ArrayNewData(type_index: Index, data_index: Index)
-  // TODO: ArrayNewElem
+  ArrayNewElem(type_index: Index, element_index: Index)
   ArrayGet(type_index: Index)
   ArrayGetS(type_index: Index)
   ArrayGetU(type_index: Index)
@@ -194,8 +202,9 @@ pub type Instruction {
   ArrayFill(type_index: Index)
   ArrayCopy(type_index: Index, source_type_index: Index)
   ArrayInitData(type_index: Index, data_index: Index)
-  // TODO: ArrayInitElem
-  // TODO: remaining reference instructions
+  ArrayInitElem(type_index: Index, element_index: Index)
+  AnyConvertExtern
+  ExternConvertAny
   //
   // Parametric instructions
   Drop
@@ -219,34 +228,36 @@ pub type Instruction {
   ElemDrop(element_index: Index)
   //
   // Memory instructions
-  I32Load(offset: Int, align: Int)
-  I64Load(offset: Int, align: Int)
-  F32Load(offset: Int, align: Int)
-  F64Load(offset: Int, align: Int)
-  I32Load8S(offset: Int, align: Int)
-  I32Load8U(offset: Int, align: Int)
-  I32Load16S(offset: Int, align: Int)
-  I32Load16U(offset: Int, align: Int)
-  I64Load8S(offset: Int, align: Int)
-  I64Load8U(offset: Int, align: Int)
-  I64Load16S(offset: Int, align: Int)
-  I64Load16U(offset: Int, align: Int)
-  I64Load32S(offset: Int, align: Int)
-  I64Load32U(offset: Int, align: Int)
-  I32Store(offset: Int, align: Int)
-  I64Store(offset: Int, align: Int)
-  F32Store(offset: Int, align: Int)
-  F64Store(offset: Int, align: Int)
-  I32Store8(offset: Int, align: Int)
-  I32Store16(offset: Int, align: Int)
-  I64Store8(offset: Int, align: Int)
-  I64Store16(offset: Int, align: Int)
-  I64Store32(offset: Int, align: Int)
-  MemorySize
-  MemoryGrow
-  MemoryFill
-  MemoryCopy
-  MemoryInit(data_index: Index)
+  I32Load(memory_index: Index, offset: String, align: String)
+  I64Load(memory_index: Index, offset: String, align: String)
+  F32Load(memory_index: Index, offset: String, align: String)
+  F64Load(memory_index: Index, offset: String, align: String)
+  I32Load8S(memory_index: Index, offset: String, align: String)
+  I32Load8U(memory_index: Index, offset: String, align: String)
+  I32Load16S(memory_index: Index, offset: String, align: String)
+  I32Load16U(memory_index: Index, offset: String, align: String)
+  I64Load8S(memory_index: Index, offset: String, align: String)
+  I64Load8U(memory_index: Index, offset: String, align: String)
+  I64Load16S(memory_index: Index, offset: String, align: String)
+  I64Load16U(memory_index: Index, offset: String, align: String)
+  I64Load32S(memory_index: Index, offset: String, align: String)
+  I64Load32U(memory_index: Index, offset: String, align: String)
+  // TODO: vector load instructions
+  I32Store(memory_index: Index, offset: String, align: String)
+  I64Store(memory_index: Index, offset: String, align: String)
+  F32Store(memory_index: Index, offset: String, align: String)
+  F64Store(memory_index: Index, offset: String, align: String)
+  I32Store8(memory_index: Index, offset: String, align: String)
+  I32Store16(memory_index: Index, offset: String, align: String)
+  I64Store8(memory_index: Index, offset: String, align: String)
+  I64Store16(memory_index: Index, offset: String, align: String)
+  I64Store32(memory_index: Index, offset: String, align: String)
+  // TODO: vector store instructions
+  MemorySize(memory_index: Index)
+  MemoryGrow(memory_index: Index)
+  MemoryFill(memory_index: Index)
+  MemoryCopy(memory_index: Index)
+  MemoryInit(memory_index: Index, data_index: Index)
   DataDrop(data_index: Index)
   //
   // Numeric instructions
@@ -912,8 +923,80 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     }
     "elem.drop" ->
       one_arg_parser_optional(index_parser(), IndexInt("0"), ElemDrop)
-    // TODO: memory instructions
-    // TODO: reference instructions
+    // memory instructions
+    "i32.load" -> mem_instr_parser(I32Load)
+    "i64.load" -> mem_instr_parser(I64Load)
+    "f32.load" -> mem_instr_parser(F32Load)
+    "f64.load" -> mem_instr_parser(F64Load)
+    "i32.load8_s" -> mem_instr_parser(I32Load8S)
+    "i32.load8_u" -> mem_instr_parser(I32Load8U)
+    "i32.load16_s" -> mem_instr_parser(I32Load16S)
+    "i32.load16_u" -> mem_instr_parser(I32Load16U)
+    "i64.load8_s" -> mem_instr_parser(I64Load8S)
+    "i64.load8_u" -> mem_instr_parser(I64Load8U)
+    "i64.load16_s" -> mem_instr_parser(I64Load16S)
+    "i64.load16_u" -> mem_instr_parser(I64Load16U)
+    "i64.load32_s" -> mem_instr_parser(I64Load32S)
+    "i64.load32_u" -> mem_instr_parser(I64Load32U)
+    // TODO: vector load instructions
+    "i32.store" -> mem_instr_parser(I32Store)
+    "i64.store" -> mem_instr_parser(I64Store)
+    "f32.store" -> mem_instr_parser(F32Store)
+    "f64.store" -> mem_instr_parser(F64Store)
+    "i32.store8" -> mem_instr_parser(I32Store8)
+    "i32.store16" -> mem_instr_parser(I32Store16)
+    "i64.store8" -> mem_instr_parser(I64Store8)
+    "i64.store16" -> mem_instr_parser(I64Store16)
+    "i64.store32" -> mem_instr_parser(I64Store32)
+    // TODO: vector store instructions
+    "memory.size" ->
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemorySize)
+    "memory.grow" ->
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryGrow)
+    "memory.fill" ->
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryFill)
+    "memory.copy" -> todo as "two optional index args"
+    "memory.init" -> todo as "memory index optional, data index required"
+    "data.drop" -> one_arg_parser(index_parser(), DataDrop)
+    // reference instructions
+    "ref.null" -> one_arg_parser(heap_type_parser(), RefNull)
+    "ref.func" -> one_arg_parser(index_parser(), RefFunc)
+    "ref.is_null" -> r(RefIsNull)
+    "ref.as_non_null" -> r(RefAsNonNull)
+    "ref.eq" -> r(RefEq)
+    "ref.test" -> one_arg_parser(ref_type_parser(), RefTest)
+    "ref.cast" -> one_arg_parser(ref_type_parser(), RefCast)
+    // aggregate instructions
+    "ref.i31" -> r(RefI31)
+    "i31.get_s" -> r(I31GetS)
+    "i31.get_u" -> r(I31GetU)
+    "struct.new" -> one_arg_parser(index_parser(), StructNew)
+    "struct.new_default" -> one_arg_parser(index_parser(), StructNewDefault)
+    "struct.get" -> two_arg_parser(index_parser(), index_parser(), StructGet)
+    "struct.get_s" -> two_arg_parser(index_parser(), index_parser(), StructGetS)
+    "struct.get_u" -> two_arg_parser(index_parser(), index_parser(), StructGetU)
+    "struct.set" -> two_arg_parser(index_parser(), index_parser(), StructSet)
+    "array.new" -> one_arg_parser(index_parser(), ArrayNew)
+    "array.new_default" -> one_arg_parser(index_parser(), ArrayNewDefault)
+    "array.new_fixed" ->
+      two_arg_parser(index_parser(), int_parser(), ArrayNewFixed)
+    "array.new_data" ->
+      two_arg_parser(index_parser(), index_parser(), ArrayNewData)
+    "array.new_elem" ->
+      two_arg_parser(index_parser(), index_parser(), ArrayNewElem)
+    "array.get" -> one_arg_parser(index_parser(), ArrayGet)
+    "array.get_s" -> one_arg_parser(index_parser(), ArrayGetS)
+    "array.get_u" -> one_arg_parser(index_parser(), ArrayGetU)
+    "array.set" -> one_arg_parser(index_parser(), ArraySet)
+    "array.len" -> r(ArrayLen)
+    "array.fill" -> one_arg_parser(index_parser(), ArrayFill)
+    "array.copy" -> two_arg_parser(index_parser(), index_parser(), ArrayCopy)
+    "array.init_data" ->
+      two_arg_parser(index_parser(), index_parser(), ArrayInitData)
+    "array.init_elem" ->
+      two_arg_parser(index_parser(), index_parser(), ArrayInitElem)
+    "any.convert_extern" -> r(AnyConvertExtern)
+    "extern.convert_any" -> r(ExternConvertAny)
     // numeric instructions
     "i32.const" -> one_arg_parser(int_parser(), I32Const)
     "i64.const" -> one_arg_parser(int_parser(), I64Const)
@@ -1026,6 +1109,34 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     // TODO: vector instructions
     _ -> nibble.fail("Unrecognized instruction")
   }
+}
+
+fn mem_instr_parser(
+  constr: fn(Index, String, String) -> Instruction,
+) -> nibble.Parser(Instruction, Token, a) {
+  use idx <- nibble.do(nibble.optional(index_parser()))
+  let idx = option.unwrap(idx, IndexInt("0"))
+  use offset <- nibble.do(
+    nibble.optional({
+      use t <- nibble.do(nibble.any())
+      case t {
+        Keyword("offset=" <> offset) -> nibble.return(offset)
+        _ -> nibble.fail("expected offset=")
+      }
+    }),
+  )
+  let offset = option.unwrap(offset, "0")
+  use align <- nibble.do(
+    nibble.optional({
+      use t <- nibble.do(nibble.any())
+      case t {
+        Keyword("align=" <> align) -> nibble.return(align)
+        _ -> nibble.fail("expected align=")
+      }
+    }),
+  )
+  let align = option.unwrap(align, "0")
+  constr(idx, offset, align) |> nibble.return
 }
 
 fn one_arg_parser(arg1, constr) {
