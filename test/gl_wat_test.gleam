@@ -312,6 +312,48 @@ pub fn br_on_cast_test() {
   )) = parse_func("(func br_on_cast 1 anyref (ref null 0))")
 }
 
+pub fn call_indirect_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.I32Const("0"),
+      w.CallIndirect(
+        w.IndexInt("0"),
+        Some(w.IndexId("$t")),
+        [w.I32, w.I32],
+        [w.I32],
+      ),
+    ],
+    ..,
+  )) =
+    parse_func(
+      "(func (call_indirect (type $t) (param i32 i32) (result i32) (i32.const 0)))",
+    )
+}
+
+pub fn flat_call_indirect_test() {
+  let assert Ok(w.Func(
+    expr: [
+      w.I32Const("0"),
+      w.CallIndirect(
+        w.IndexInt("0"),
+        Some(w.IndexId("$t")),
+        [w.I32, w.I32],
+        [w.I32],
+      ),
+      w.I32Const("1"),
+      w.I32Const("2"),
+    ],
+    ..,
+  )) =
+    parse_func(
+      "(func i32.const 0 call_indirect 0 (type $t) (param i32 i32) (result i32) i32.const 1 i32.const 2)",
+    )
+}
+
+pub fn call_indirect_disallows_param_labels_test() {
+  let assert Error(_) = parse_func("(func call_indirect (param $a i32))")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

@@ -396,7 +396,7 @@ fn func_parser_internal() {
           |> nibble.map(nibble.Continue),
       ])
     },
-    staged_many(func_flat_expr_parser(func), stage, 5)
+    staged_many(flat_expr_parser(func, append_func_expr), stage, 5)
       |> nibble.map(nibble.Continue),
   ])
 }
@@ -450,9 +450,12 @@ fn instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
   ])
 }
 
-fn func_flat_expr_parser(func: Func) -> nibble.Parser(Func, Token, a) {
+fn flat_expr_parser(
+  ctx: context,
+  update: fn(context, List(Instruction)) -> context,
+) -> nibble.Parser(context, Token, a) {
   use expr <- nibble.do(flat_instr_parser())
-  nibble.return(Func(..func, expr: list.append(func.expr, expr)))
+  nibble.return(update(ctx, expr))
 }
 
 fn flat_instr_parser() {
@@ -467,6 +470,12 @@ fn flat_instr_parser() {
         _ -> panic
       }
       nibble.return([block, ..arg])
+    }
+    CallIndirect(table_index:, ..) -> {
+      flat_call_indirect_parser(table_index, None, [], [], CallIndirect)
+    }
+    ReturnCallIndirect(table_index:, ..) -> {
+      flat_call_indirect_parser(table_index, None, [], [], ReturnCallIndirect)
     }
     _ -> {
       nibble.return([expr])
@@ -485,6 +494,10 @@ fn folded_instr_parser_internal() {
     Block(label:, ..) -> folded_block_parser(label, Block)
     Loop(label:, ..) -> folded_block_parser(label, Loop)
     If(label:, ..) -> folded_if_parser(label)
+    CallIndirect(table_index:, ..) ->
+      folded_call_indirect_parser(table_index, None, [], [], CallIndirect)
+    ReturnCallIndirect(table_index:, ..) ->
+      folded_call_indirect_parser(table_index, None, [], [], ReturnCallIndirect)
     _ -> {
       use args <- nibble.do(nibble.many(instr_parser()))
       nibble.return(list.append(list.flatten(args), [expr]))
@@ -492,6 +505,128 @@ fn folded_instr_parser_internal() {
   })
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(expr)
+}
+
+type CallIndirectState {
+  CallIndirectState(
+    type_: Option(Index),
+    params: List(ValueType),
+    results: List(ValueType),
+    args: List(Instruction),
+  )
+}
+
+fn folded_call_indirect_parser(
+  table_index: Index,
+  type_: Option(Index),
+  params: List(ValueType),
+  results: List(ValueType),
+  constr: fn(Index, Option(Index), List(ValueType), List(ValueType)) ->
+    Instruction,
+) -> nibble.Parser(List(Instruction), Token, a) {
+  use CallIndirectState(type_:, params:, results:, args:) <- nibble.do({
+    use #(stage, state) <- nibble.loop(#(
+      0,
+      CallIndirectState(type_:, params:, results:, args: []),
+    ))
+    use maybe_state <- nibble.do(call_indirect_parser_internal(state, stage))
+    case maybe_state {
+      Some(state) -> nibble.Continue(state)
+      None -> nibble.Break(state)
+    }
+    |> nibble.return
+  })
+  nibble.return(
+    list.append(args, [constr(table_index, type_, params, results)]),
+  )
+}
+
+fn flat_call_indirect_parser(
+  table_index: Index,
+  type_: Option(Index),
+  params: List(ValueType),
+  results: List(ValueType),
+  constr: fn(Index, Option(Index), List(ValueType), List(ValueType)) ->
+    Instruction,
+) -> nibble.Parser(List(Instruction), Token, a) {
+  use CallIndirectState(type_:, params:, results:, args:) <- nibble.do({
+    use #(stage, state) <- nibble.loop(#(
+      0,
+      CallIndirectState(type_:, params:, results:, args: []),
+    ))
+    use maybe_state <- nibble.do(call_indirect_parser_internal(state, stage))
+    case maybe_state {
+      Some(#(4, state)) -> nibble.Break(state)
+      Some(state) -> nibble.Continue(state)
+      None -> nibble.Break(state)
+    }
+    |> nibble.return
+  })
+  nibble.return([constr(table_index, type_, params, results), ..args])
+}
+
+fn call_indirect_parser_internal(
+  state: CallIndirectState,
+  stage: Int,
+) -> nibble.Parser(Option(#(Int, CallIndirectState)), Token, a) {
+  nibble.optional(
+    nibble.one_of([
+      {
+        use _ <- nibble.do(nibble.token(LParen))
+        nibble.one_of([
+          staged_optional(
+            func_type_parser(state, update_call_indirect_type),
+            stage,
+            1,
+          ),
+          staged_many(
+            result_like_parser("param", state, append_call_indirect_params),
+            stage,
+            2,
+          ),
+          staged_many(
+            result_parser(state, append_call_indirect_results),
+            stage,
+            3,
+          ),
+          staged_many(
+            folded_expr_parser(state, append_call_indirect_args),
+            stage,
+            4,
+          ),
+        ])
+      },
+      staged_many(flat_expr_parser(state, append_call_indirect_args), stage, 4),
+    ]),
+  )
+}
+
+fn update_call_indirect_type(
+  state: CallIndirectState,
+  type_: Option(Index),
+) -> CallIndirectState {
+  CallIndirectState(..state, type_:)
+}
+
+fn append_call_indirect_params(
+  state: CallIndirectState,
+  params: List(ValueType),
+) {
+  CallIndirectState(..state, params: list.append(state.params, params))
+}
+
+fn append_call_indirect_results(
+  state: CallIndirectState,
+  results: List(ValueType),
+) {
+  CallIndirectState(..state, results: list.append(state.results, results))
+}
+
+fn append_call_indirect_args(
+  state: CallIndirectState,
+  args: List(Instruction),
+) {
+  CallIndirectState(..state, args: list.append(state.args, args))
 }
 
 fn folded_if_parser(
@@ -505,6 +640,7 @@ fn folded_if_parser(
     use maybe <- nibble.do(nibble.token(LParen) |> nibble.optional)
     use <- bool.guard(maybe == None, nibble.return(nibble.Break(state)))
     nibble.one_of([
+      // TODO: should be staged_optional?
       staged_many(func_type_parser(state, update_if_else_type), stage, 1),
       staged_many(param_parser(state, append_if_else_params), stage, 2),
       staged_many(result_parser(state, append_if_else_results), stage, 3),
@@ -661,13 +797,27 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
       )
     "call" -> one_arg_parser(index_parser(), Call)
     "call_ref" -> one_arg_parser(index_parser(), CallRef)
-    "call_indirect" -> todo
+    "call_indirect" -> {
+      // NOTE: parsing the type use is up to the caller
+      use table_index <- nibble.do(index_parser() |> nibble.optional)
+      let table_index = option.unwrap(table_index, IndexInt("0"))
+      nibble.return(
+        CallIndirect(table_index:, type_: None, params: [], results: []),
+      )
+    }
     "return" -> r(Return)
     "return_call" -> one_arg_parser(index_parser(), ReturnCall)
     "return_call_ref" -> one_arg_parser(index_parser(), ReturnCallRef)
-    "return_call_indirect" -> todo
-    "throw" -> todo
-    "throw_ref" -> todo
+    "return_call_indirect" -> {
+      // NOTE: parsing the type use is up to the caller
+      use table_index <- nibble.do(index_parser() |> nibble.optional)
+      let table_index = option.unwrap(table_index, IndexInt("0"))
+      nibble.return(
+        ReturnCallIndirect(table_index:, type_: None, params: [], results: []),
+      )
+    }
+    // "throw" -> todo
+    // "throw_ref" -> todo
     // variable instructions
     "local.get" -> one_arg_parser(index_parser(), LocalGet)
     "local.set" -> one_arg_parser(index_parser(), LocalSet)
@@ -684,7 +834,6 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "table.grow" ->
       one_arg_parser_optional(index_parser(), IndexInt("0"), TableGrow)
     "table.copy" ->
-      // TODO: could possibly be more robust...
       nibble.one_of([
         two_arg_parser(index_parser(), index_parser(), TableCopy),
         r(TableCopy(IndexInt("0"), IndexInt("0"))),
@@ -882,16 +1031,22 @@ fn float_parser() -> nibble.Parser(String, Token, a) {
 }
 
 fn param_parser(ctx: context, update: fn(context, List(Param)) -> context) {
-  use _ <- nibble.do(nibble.token(Keyword("param")))
-  use params <- nibble.do(param_like_parser())
-  nibble.return(update(ctx, params))
+  param_like_parser("param", ctx, update)
 }
 
 fn result_parser(
   ctx: context,
   update: fn(context, List(ValueType)) -> context,
 ) {
-  use _ <- nibble.do(nibble.token(Keyword("result")))
+  result_like_parser("result", ctx, update)
+}
+
+fn result_like_parser(
+  name: String,
+  ctx: context,
+  update: fn(context, List(ValueType)) -> context,
+) {
+  use _ <- nibble.do(nibble.token(Keyword(name)))
   use types <- nibble.do(nibble.many(value_type_parser()))
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(update(ctx, types))
@@ -901,14 +1056,17 @@ fn local_parser(
   ctx: context,
   update: fn(context, List(Param)) -> context,
 ) -> nibble.Parser(context, Token, a) {
-  use _ <- nibble.do(nibble.token(Keyword("local")))
-  use locals <- nibble.do(param_like_parser())
-  nibble.return(update(ctx, locals))
+  param_like_parser("local", ctx, update)
 }
 
-fn param_like_parser() {
+fn param_like_parser(
+  name: String,
+  ctx: context,
+  update: fn(context, List(Param)) -> context,
+) -> nibble.Parser(context, Token, a) {
+  use _ <- nibble.do(nibble.token(Keyword(name)))
   use maybe_id <- nibble.do(nibble.optional(id_parser()))
-  case maybe_id {
+  use params <- nibble.do(case maybe_id {
     Some(id) -> {
       use type_ <- nibble.do(value_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
@@ -919,7 +1077,8 @@ fn param_like_parser() {
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(list.map(types, Param(None, _)))
     }
-  }
+  })
+  nibble.return(update(ctx, params))
 }
 
 fn id_parser() {
