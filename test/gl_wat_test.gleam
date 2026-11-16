@@ -354,6 +354,11 @@ pub fn call_indirect_disallows_param_labels_test() {
   let assert Error(_) = parse_func("(func call_indirect (param $a i32))")
 }
 
+pub fn select_test() {
+  let assert Ok(w.Func(expr: [w.I32Const("5"), w.Select([w.I32, w.F64])], ..)) =
+    parse_func("(func (select (result i32) (result f64) (i32.const 5)))")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

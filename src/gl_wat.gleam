@@ -461,6 +461,9 @@ fn flat_expr_parser(
 fn flat_instr_parser() {
   use expr <- nibble.do(basic_instr_parser())
   case expr {
+    Select(..) -> {
+      flat_select_parser()
+    }
     Block(..) | Loop(..) | If(..) -> {
       use #(block_type, arg) <- nibble.do(block_type_parser())
       let block = case expr {
@@ -491,6 +494,7 @@ fn folded_instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
 fn folded_instr_parser_internal() {
   use expr <- nibble.do(basic_instr_parser())
   use expr <- nibble.do(case expr {
+    Select(..) -> folded_select_parser()
     Block(label:, ..) -> folded_block_parser(label, Block)
     Loop(label:, ..) -> folded_block_parser(label, Loop)
     If(label:, ..) -> folded_if_parser(label)
@@ -514,6 +518,64 @@ type CallIndirectState {
     results: List(ValueType),
     args: List(Instruction),
   )
+}
+
+type SelectState {
+  SelectState(results: List(ValueType), args: List(Instruction))
+}
+
+fn flat_select_parser() {
+  use #(stage, state) <- nibble.loop(#(0, SelectState([], [])))
+  use maybe_state <- nibble.do(select_parser_internal(state, stage))
+  case maybe_state {
+    Some(#(2, state)) ->
+      nibble.Break(list.append(state.args, [Select(state.results)]))
+    Some(state) -> nibble.Continue(state)
+    None -> nibble.Break(list.append(state.args, [Select(state.results)]))
+  }
+  |> nibble.return
+}
+
+fn folded_select_parser() {
+  use #(stage, state) <- nibble.loop(#(0, SelectState([], [])))
+  use maybe_state <- nibble.do(select_parser_internal(state, stage))
+  case maybe_state {
+    Some(state) -> nibble.Continue(state)
+    None -> nibble.Break(list.append(state.args, [Select(state.results)]))
+  }
+  |> nibble.return
+}
+
+fn select_parser_internal(
+  state: SelectState,
+  stage: Int,
+) -> nibble.Parser(Option(#(Int, SelectState)), Token, a) {
+  nibble.optional(
+    nibble.one_of([
+      {
+        use _ <- nibble.do(nibble.token(LParen))
+        nibble.one_of([
+          staged_many(result_parser(state, append_select_results), stage, 1),
+          staged_many(folded_expr_parser(state, append_select_args), stage, 2),
+        ])
+      },
+      staged_many(flat_expr_parser(state, append_select_args), stage, 2),
+    ]),
+  )
+}
+
+fn append_select_results(
+  state: SelectState,
+  results: List(ValueType),
+) -> SelectState {
+  SelectState(..state, results: list.append(state.results, results))
+}
+
+fn append_select_args(
+  state: SelectState,
+  args: List(Instruction),
+) -> SelectState {
+  SelectState(..state, args: list.append(state.args, args))
 }
 
 fn folded_call_indirect_parser(
@@ -762,7 +824,8 @@ fn basic_instr_parser() -> nibble.Parser(Instruction, Token, a) {
     "nop" -> r(Nop)
     "unreachable" -> r(Unreachable)
     "drop" -> r(Drop)
-    "select" -> todo
+    // NOTE: further parsing of result types is handled by the caller
+    "select" -> r(Select([]))
     // control instructions
     // NOTE: further parsing of block instructions is handled by the caller
     "block" ->
