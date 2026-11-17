@@ -65,6 +65,7 @@ pub fn str_lexer_test() {
 
 pub fn parse_func(str) {
   let assert Ok(tokens) = lexer.run(str, w.lexer())
+  let tokens = w.simplify(tokens)
   nibble.run(tokens, w.func_parser())
 }
 
