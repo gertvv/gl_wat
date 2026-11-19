@@ -40,6 +40,8 @@ pub fn lexer() {
     lexer.token("(", LParen),
     lexer.token(")", RParen),
     lexer.comment(";;", fn(_) { Nil }) |> lexer.ignore(),
+    // TODO: block comments
+    // TODO: annotations
     // TODO: the spec's definition of whitespace
     lexer.whitespace(Nil) |> lexer.ignore(),
   ])
@@ -126,10 +128,6 @@ pub type BlockType {
   )
   BlockResult(ValueType)
   BlockEmpty
-}
-
-type TypeUse {
-  TypeUse(type_: Option(Index), params: List(Param), results: List(ValueType))
 }
 
 pub type Instruction {
@@ -378,6 +376,91 @@ pub type Instruction {
 pub type Index {
   IndexInt(String)
   IndexId(String)
+}
+
+type TypeUse {
+  TypeUse(type_: Option(Index), params: List(Param), results: List(ValueType))
+}
+
+pub type Global {
+  Global(
+    id: Option(String),
+    mutability: Mutability,
+    type_: ValueType,
+    expr: List(Instruction),
+  )
+}
+
+/// Indicates wheter a field is mutable.
+pub type Mutability {
+  Mutable
+  Immutable
+}
+
+pub type Decl {
+  FuncDecl(Func)
+  GlobalDecl(Global)
+}
+
+pub type Module {
+  Module(id: Option(String), func: List(Func), global: List(Global))
+}
+
+pub fn module_parser() {
+  use mod <- nibble.do(nibble.optional(nibble.token(LKeyword("module"))))
+  use #(id, decl) <- nibble.do(case mod {
+    Some(_) -> {
+      use id <- nibble.do(nibble.optional(id_parser()))
+      use decl <- nibble.do(nibble.many(decl_parser()))
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(#(id, decl))
+    }
+    None -> {
+      use decl <- nibble.do(nibble.many(decl_parser()))
+      nibble.return(#(None, decl))
+    }
+  })
+  let mod =
+    list.flatten(decl)
+    |> list.fold(Module(id, global: [], func: []), fn(mod, decl) {
+      case decl {
+        FuncDecl(func) -> Module(..mod, func: [func, ..mod.func])
+        GlobalDecl(global) -> Module(..mod, global: [global, ..mod.global])
+      }
+    })
+  Module(..mod, func: list.reverse(mod.func), global: list.reverse(mod.global))
+  |> nibble.return
+}
+
+fn decl_parser() -> nibble.Parser(List(Decl), Token, b) {
+  nibble.one_of([
+    func_parser() |> nibble.map(fn(func) { [FuncDecl(func)] }),
+    global_parser(),
+  ])
+}
+
+fn global_parser() -> nibble.Parser(List(Decl), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("global")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  use #(mutability, type_) <- nibble.do(global_type_parser())
+  use expr <- nibble.do(nibble.many(instr_parser()) |> nibble.map(list.flatten))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return([GlobalDecl(Global(id:, mutability:, type_:, expr:))])
+}
+
+fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
+  nibble.one_of([
+    {
+      use _ <- nibble.do(nibble.token(LKeyword("mut")))
+      use type_ <- nibble.do(value_type_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(#(Mutable, type_))
+    },
+    {
+      use type_ <- nibble.do(value_type_parser())
+      nibble.return(#(Immutable, type_))
+    },
+  ])
 }
 
 pub fn func_parser() {

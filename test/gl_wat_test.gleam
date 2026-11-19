@@ -69,6 +69,12 @@ pub fn parse_func(str) {
   nibble.run(tokens, w.func_parser())
 }
 
+fn parse_module(str: String) {
+  let assert Ok(tokens) = lexer.run(str, w.lexer())
+  let tokens = w.simplify(tokens)
+  nibble.run(tokens, w.module_parser())
+}
+
 pub fn parse_func_empty_test() {
   let assert Ok(w.Func(None, None, [], [], [], [])) = parse_func("(func)")
 }
@@ -358,6 +364,27 @@ pub fn call_indirect_disallows_param_labels_test() {
 pub fn select_test() {
   let assert Ok(w.Func(expr: [w.I32Const("5"), w.Select([w.I32, w.F64])], ..)) =
     parse_func("(func (select (result i32) (result f64) (i32.const 5)))")
+}
+
+pub fn parse_module_test() {
+  let assert Ok(w.Module(Some("$mod"), func: [], ..)) =
+    parse_module("(module $mod)")
+
+  let assert Ok(w.Module(func: [w.Func(expr: [w.Unreachable], ..)], ..)) =
+    parse_module("(module (func unreachable))")
+}
+
+pub fn parse_module_global_test() {
+  let assert Ok(w.Module(
+    global: [
+      w.Global(Some("$g"), w.Mutable, w.I32, [w.I32Const("1")]),
+      w.Global(None, w.Immutable, w.I64, [w.I64Const("3")]),
+    ],
+    ..,
+  )) =
+    parse_module(
+      "(module (global $g (mut i32) (i32.const 1)) (global i64 i64.const 3))",
+    )
 }
 
 fn assert_lex_self_as(l, input, fun) {
