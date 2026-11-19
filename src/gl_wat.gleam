@@ -109,8 +109,8 @@ pub type Param {
   Param(id: Option(String), typ: ValueType)
 }
 
-pub type Func {
-  Func(
+pub type Function {
+  Function(
     id: Option(String),
     type_: Option(Index),
     params: List(Param),
@@ -128,6 +128,39 @@ pub type BlockType {
   )
   BlockResult(ValueType)
   BlockEmpty
+}
+
+pub type RecType {
+  RecType(List(TypeDef))
+}
+
+pub type TypeDef {
+  TypeDef(id: Option(String), sub: SubType, super: List(Index), def: CompType)
+}
+
+pub type SubType {
+  Open
+  Final
+}
+
+pub type CompType {
+  Struct(fields: List(Field))
+  Array(FieldType)
+  Func(params: List(Param), result: List(ValueType))
+}
+
+pub type Field {
+  Field(id: Option(String), field_type: FieldType)
+}
+
+pub type FieldType {
+  ValueField(mutability: Mutability, value_type: ValueType)
+  PackedField(mutability: Mutability, packed_type: PackedType)
+}
+
+pub type PackedType {
+  I8
+  I16
 }
 
 pub type Instruction {
@@ -398,12 +431,18 @@ pub type Mutability {
 }
 
 pub type Decl {
-  FuncDecl(Func)
+  RecTypeDecl(RecType)
+  FuncDecl(Function)
   GlobalDecl(Global)
 }
 
 pub type Module {
-  Module(id: Option(String), func: List(Func), global: List(Global))
+  Module(
+    id: Option(String),
+    rec_type: List(RecType),
+    func: List(Function),
+    global: List(Global),
+  )
 }
 
 pub fn module_parser() {
@@ -422,18 +461,26 @@ pub fn module_parser() {
   })
   let mod =
     list.flatten(decl)
-    |> list.fold(Module(id, global: [], func: []), fn(mod, decl) {
+    |> list.fold(Module(id, rec_type: [], global: [], func: []), fn(mod, decl) {
       case decl {
+        RecTypeDecl(rec_type) ->
+          Module(..mod, rec_type: [rec_type, ..mod.rec_type])
         FuncDecl(func) -> Module(..mod, func: [func, ..mod.func])
         GlobalDecl(global) -> Module(..mod, global: [global, ..mod.global])
       }
     })
-  Module(..mod, func: list.reverse(mod.func), global: list.reverse(mod.global))
+  Module(
+    ..mod,
+    rec_type: list.reverse(mod.rec_type),
+    func: list.reverse(mod.func),
+    global: list.reverse(mod.global),
+  )
   |> nibble.return
 }
 
 fn decl_parser() -> nibble.Parser(List(Decl), Token, b) {
   nibble.one_of([
+    rec_type_parser() |> nibble.map(fn(rec) { [RecTypeDecl(rec)] }),
     func_parser() |> nibble.map(fn(func) { [FuncDecl(func)] }),
     global_parser(),
   ])
@@ -463,6 +510,120 @@ fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
   ])
 }
 
+pub fn rec_type_parser() {
+  nibble.one_of([
+    {
+      use _ <- nibble.do(nibble.token(LKeyword("rec")))
+      use typedefs <- nibble.do(nibble.many(type_def_parser()))
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(typedefs)
+    },
+    type_def_parser() |> nibble.map(fn(t) { [t] }),
+  ])
+  |> nibble.map(RecType)
+}
+
+fn type_def_parser() -> nibble.Parser(TypeDef, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("type")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  use #(sub, super, def) <- nibble.do(sub_type_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(TypeDef(id:, sub:, super:, def:))
+}
+
+fn sub_type_parser() -> nibble.Parser(
+  #(SubType, List(Index), CompType),
+  Token,
+  b,
+) {
+  nibble.one_of([
+    {
+      use _ <- nibble.do(nibble.token(LKeyword("sub")))
+      use sub <- nibble.do(
+        nibble.token(Keyword("final"))
+        |> nibble.replace(Final)
+        |> nibble.optional
+        |> nibble.map(option.unwrap(_, Open)),
+      )
+      use super <- nibble.do(nibble.many(index_parser()))
+      use def <- nibble.do(comp_type_parser())
+      nibble.return(#(sub, super, def))
+    },
+    {
+      use def <- nibble.do(comp_type_parser())
+      nibble.return(#(Final, [], def))
+    },
+  ])
+}
+
+fn comp_type_parser() -> nibble.Parser(CompType, Token, b) {
+  nibble.one_of([
+    def_struct_parser(),
+    def_array_parser(),
+    def_func_parser(),
+  ])
+}
+
+fn def_struct_parser() -> nibble.Parser(CompType, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("struct")))
+  use fields <- nibble.do(nibble.many(field_parser()))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(Struct(fields))
+}
+
+fn def_array_parser() -> nibble.Parser(CompType, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("array")))
+  use ft <- nibble.do(field_type_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(Array(ft))
+}
+
+fn def_func_parser() -> nibble.Parser(CompType, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("func")))
+  use params <- nibble.do(
+    nibble.many(param_parser()) |> nibble.map(list.flatten),
+  )
+  use results <- nibble.do(
+    nibble.many(result_parser()) |> nibble.map(list.flatten),
+  )
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(Func(params, results))
+}
+
+fn field_parser() -> nibble.Parser(Field, Token, b) {
+  // TODO: abbreviation for anonymous fields (multiple in one)
+  use _ <- nibble.do(nibble.token(LKeyword("field")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  use ft <- nibble.do(field_type_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(Field(id, ft))
+}
+
+fn field_type_parser() -> nibble.Parser(FieldType, Token, b) {
+  nibble.one_of([
+    {
+      use _ <- nibble.do(nibble.token(LKeyword("mut")))
+      use st <- nibble.do(storage_type_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(case st {
+        ValueField(mutability: _, value_type:) ->
+          ValueField(Mutable, value_type)
+        PackedField(mutability: _, packed_type:) ->
+          PackedField(Mutable, packed_type)
+      })
+    },
+    storage_type_parser(),
+  ])
+}
+
+fn storage_type_parser() -> nibble.Parser(FieldType, Token, b) {
+  nibble.one_of([
+    nibble.token(Keyword("i8")) |> nibble.replace(PackedField(Immutable, I8)),
+    nibble.token(Keyword("i16")) |> nibble.replace(PackedField(Immutable, I16)),
+    value_type_parser() |> nibble.map(ValueField(Immutable, _)),
+  ])
+}
+
 pub fn func_parser() {
   use _ <- nibble.do(nibble.token(LKeyword("func")))
   use id <- nibble.do(id_parser() |> nibble.optional)
@@ -474,7 +635,7 @@ pub fn func_parser() {
     nibble.many(nibble.one_of([folded_instr_parser(), flat_instr_parser()])),
   )
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Func(
+  nibble.return(Function(
     id,
     type_,
     params,
@@ -1012,18 +1173,13 @@ fn id_parser() {
 }
 
 fn value_type_parser() {
-  use t <- nibble.do(nibble.any())
-  case t {
-    Keyword(name) ->
-      case name {
-        "i32" -> nibble.return(I32)
-        "i64" -> nibble.return(I64)
-        "f32" -> nibble.return(F32)
-        "f64" -> nibble.return(F64)
-        _ -> nibble.fail("expeced a value type")
-      }
-    _ -> nibble.fail("expected a keyword")
-  }
+  nibble.one_of([
+    nibble.token(Keyword("i32")) |> nibble.replace(I32),
+    nibble.token(Keyword("i64")) |> nibble.replace(I64),
+    nibble.token(Keyword("f32")) |> nibble.replace(F32),
+    nibble.token(Keyword("f64")) |> nibble.replace(F64),
+    ref_type_parser() |> nibble.map(Ref),
+  ])
 }
 
 fn ref_type_parser() -> nibble.Parser(RefType, Token, a) {
