@@ -143,7 +143,6 @@ pub type HeapType {
   // TODO: exn, noexn
   HeapExtern
   HeapNoExtern
-  // TODO: call this TypeUse?
   HeapIndex(Index)
 }
 
@@ -462,6 +461,15 @@ type TypeUse {
   TypeUse(type_: Option(Index), params: List(Param), results: List(ValueType))
 }
 
+pub type Tag {
+  Tag(
+    id: Option(String),
+    type_: Option(Index),
+    params: List(Param),
+    results: List(ValueType),
+  )
+}
+
 pub type Global {
   Global(
     id: Option(String),
@@ -534,6 +542,14 @@ pub type Start {
 }
 
 pub type Import {
+  ImportTag(
+    module_name: String,
+    import_name: String,
+    id: Option(String),
+    type_: Option(Index),
+    params: List(Param),
+    results: List(ValueType),
+  )
   ImportGlobal(
     module_name: String,
     import_name: String,
@@ -567,7 +583,7 @@ pub type Import {
 }
 
 pub type Export {
-  // ExportTag
+  ExportTag(name: String, tag_index: Index)
   ExportGlobal(name: String, global_index: Index)
   ExportMemory(name: String, memory_index: Index)
   ExportTable(name: String, table_index: Index)
@@ -577,6 +593,7 @@ pub type Export {
 pub type Decl {
   TypeDecl(RecType)
   ImportDecl(Import)
+  TagDecl(Tag)
   GlobalDecl(Global)
   MemoryDecl(Memory)
   TableDecl(Table)
@@ -592,6 +609,7 @@ pub type Module {
     id: Option(String),
     types: List(RecType),
     imports: List(Import),
+    tags: List(Tag),
     globals: List(Global),
     memories: List(Memory),
     tables: List(Table),
@@ -606,6 +624,7 @@ pub type Module {
 type ParseContext {
   ParseContext(
     types: Int,
+    tags: Int,
     globals: Int,
     memories: Int,
     tables: Int,
@@ -635,12 +654,13 @@ pub fn module_parser() {
   let mod =
     list.fold(
       decl,
-      Module(id, [], [], [], [], [], [], [], [], None, []),
+      Module(id, [], [], [], [], [], [], [], [], [], None, []),
       fn(mod, decl) {
         case decl {
           TypeDecl(rec_type) -> Module(..mod, types: [rec_type, ..mod.types])
           ImportDecl(import_) ->
             Module(..mod, imports: [import_, ..mod.imports])
+          TagDecl(tag) -> Module(..mod, tags: [tag, ..mod.tags])
           GlobalDecl(global) -> Module(..mod, globals: [global, ..mod.globals])
           MemoryDecl(mem) -> Module(..mod, memories: [mem, ..mod.memories])
           TableDecl(table) -> Module(..mod, tables: [table, ..mod.tables])
@@ -659,7 +679,7 @@ pub fn module_parser() {
 
 /// Returns all module declarations in reverse order
 fn module_declarations_parser() -> nibble.Parser(List(Decl), Token, b) {
-  let ctx = ParseContext(0, 0, 0, 0, 0, 0, 0, False, False)
+  let ctx = ParseContext(0, 0, 0, 0, 0, 0, 0, 0, False, False)
   use #(ctx, decl) <- nibble.loop(#(ctx, []))
   use res <- nibble.do(decl_parser(ctx) |> nibble.optional)
   case res {
@@ -684,7 +704,8 @@ fn decl_parser(
   nibble.one_of([
     rec_type_parser() |> nibble.map(fn(rec) { #(ctx, [TypeDecl(rec)]) }),
     import_parser(ctx),
-    global_parser() |> nibble.map(fn(glob) { #(ctx, glob) }),
+    tag_parser(ctx),
+    global_parser(ctx),
     memory_parser(ctx),
     table_parser(ctx),
     func_parser(ctx),
@@ -695,14 +716,52 @@ fn decl_parser(
   ])
 }
 
+fn tag_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("tag")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
+  nibble.one_of([
+    {
+      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, tags: ctx.tags + 1), [
+          ImportDecl(ImportTag(
+            module_name:,
+            import_name:,
+            id:,
+            type_:,
+            params:,
+            results:,
+          )),
+          ..exports
+        ]),
+      )
+    },
+    {
+      use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, tags: ctx.tags + 1, non_import_defs: True), [
+          TagDecl(Tag(id:, type_:, params:, results:)),
+          ..exports
+        ]),
+      )
+    },
+  ])
+}
+
 fn export_parser(
   ctx: ParseContext,
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("export")))
   use export_name <- nibble.do(string_parser())
   use export <- nibble.do(nibble.one_of(
-    // TODO: tag
     [
+      #("tag", ExportTag),
       #("global", ExportGlobal),
       #("memory", ExportMemory),
       #("table", ExportTable),
@@ -790,6 +849,7 @@ fn import_parser(
   )
   use _ <- nibble.do(nibble.token(RParen))
   let ctx = case import_ {
+    ImportTag(..) -> ParseContext(..ctx, tags: ctx.tags + 1)
     ImportGlobal(..) -> ParseContext(..ctx, globals: ctx.globals + 1)
     ImportMemory(..) -> ParseContext(..ctx, memories: ctx.memories + 1)
     ImportTable(..) -> ParseContext(..ctx, tables: ctx.tables + 1)
@@ -866,17 +926,21 @@ fn element_parser(
   ])
 }
 
+fn inline_exports_parser(new_index: Int, constr) {
+  nibble.many(
+    inline_export_parser()
+    |> nibble.map(fn(name) {
+      ExportDecl(constr(name, IndexInt(int.to_string(new_index))))
+    }),
+  )
+}
+
 fn table_parser(
   ctx: ParseContext,
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("table")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  use exports <- nibble.do(nibble.many(
-    inline_export_parser()
-    |> nibble.map(fn(name) {
-      ExportDecl(ExportTable(name, IndexInt(int.to_string(ctx.tables))))
-    }),
-  ))
+  use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
   nibble.one_of([
     {
       // inline import case
@@ -926,6 +990,7 @@ fn table_parser(
                 ..ctx,
                 tables: ctx.tables + 1,
                 elements: ctx.elements + 1,
+                non_import_defs: True,
               ),
               [
                 TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
@@ -956,10 +1021,13 @@ fn table_parser(
           })
           use _ <- nibble.do(nibble.token(RParen))
           nibble.return(
-            #(ParseContext(..ctx, tables: ctx.tables + 1), [
-              TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
-              ..exports
-            ]),
+            #(
+              ParseContext(..ctx, tables: ctx.tables + 1, non_import_defs: True),
+              [
+                TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
+                ..exports
+              ],
+            ),
           )
         },
       ])
@@ -1081,12 +1149,7 @@ const page_size = 65_536
 fn memory_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("memory")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  use exports <- nibble.do(nibble.many(
-    inline_export_parser()
-    |> nibble.map(fn(name) {
-      ExportDecl(ExportMemory(name, IndexInt(int.to_string(ctx.memories))))
-    }),
-  ))
+  use exports <- nibble.do(inline_exports_parser(ctx.memories, ExportMemory))
   nibble.one_of([
     {
       // inline import case
@@ -1124,6 +1187,7 @@ fn memory_parser(ctx: ParseContext) {
                 ..ctx,
                 memories: ctx.memories + 1,
                 datas: ctx.datas + 1,
+                non_import_defs: True,
               ),
               [
                 MemoryDecl(Memory(
@@ -1151,9 +1215,16 @@ fn memory_parser(ctx: ParseContext) {
           use limits <- nibble.do(limits_parser())
           use _ <- nibble.do(nibble.token(RParen))
           nibble.return(
-            #(ParseContext(..ctx, memories: ctx.memories + 1), [
-              MemoryDecl(Memory(id:, address_type:, limits:)),
-            ]),
+            #(
+              ParseContext(
+                ..ctx,
+                memories: ctx.memories + 1,
+                non_import_defs: True,
+              ),
+              [
+                MemoryDecl(Memory(id:, address_type:, limits:)),
+              ],
+            ),
           )
         },
       ])
@@ -1226,14 +1297,42 @@ fn address_type_parser() -> nibble.Parser(AddressType, Token, b) {
   )
 }
 
-fn global_parser() -> nibble.Parser(List(Decl), Token, b) {
-  // TODO: inline imports
+fn global_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("global")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  use #(mutability, value_type) <- nibble.do(global_type_parser())
-  use expr <- nibble.do(expr_parser())
-  use _ <- nibble.do(nibble.token(RParen))
-  nibble.return([GlobalDecl(Global(id:, mutability:, value_type:, expr:))])
+  use exports <- nibble.do(inline_exports_parser(ctx.globals, ExportGlobal))
+  nibble.one_of([
+    {
+      // inline import case
+      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(mutability, value_type) <- nibble.do(global_type_parser())
+      nibble.return(
+        #(ParseContext(..ctx, globals: ctx.globals + 1), [
+          ImportDecl(ImportGlobal(
+            module_name:,
+            import_name:,
+            id:,
+            mutability:,
+            value_type:,
+          )),
+          ..exports
+        ]),
+      )
+    },
+    {
+      use #(mutability, value_type) <- nibble.do(global_type_parser())
+      use expr <- nibble.do(expr_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, globals: ctx.globals + 1, non_import_defs: True), [
+          GlobalDecl(Global(id:, mutability:, value_type:, expr:)),
+          ..exports
+        ]),
+      )
+    },
+  ])
 }
 
 fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
@@ -1367,12 +1466,7 @@ fn storage_type_parser() -> nibble.Parser(FieldType, Token, b) {
 fn func_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("func")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  use exports <- nibble.do(nibble.many(
-    inline_export_parser()
-    |> nibble.map(fn(name) {
-      ExportDecl(ExportFunction(name, IndexInt(int.to_string(ctx.functions))))
-    }),
-  ))
+  use exports <- nibble.do(inline_exports_parser(ctx.functions, ExportFunction))
   nibble.one_of([
     {
       // import case
@@ -1402,10 +1496,24 @@ fn func_parser(ctx: ParseContext) {
       use expr <- nibble.do(expr_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(
-        #(ParseContext(..ctx, functions: ctx.functions + 1), [
-          FunctionDecl(Function(id:, type_:, params:, results:, locals:, expr:)),
-          ..exports
-        ]),
+        #(
+          ParseContext(
+            ..ctx,
+            functions: ctx.functions + 1,
+            non_import_defs: True,
+          ),
+          [
+            FunctionDecl(Function(
+              id:,
+              type_:,
+              params:,
+              results:,
+              locals:,
+              expr:,
+            )),
+            ..exports
+          ],
+        ),
       )
     },
   ])

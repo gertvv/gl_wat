@@ -73,6 +73,7 @@ pub fn parse_func(str) {
       id: None,
       types: [],
       imports: [],
+      tags: [],
       globals: [],
       memories: [],
       tables: [],
@@ -412,6 +413,14 @@ pub fn parse_module_global_test() {
     )
 }
 
+pub fn parse_module_global_inline_import_export_test() {
+  let assert Ok(w.Module(
+    imports: [w.ImportGlobal("mod", "glob", None, w.Immutable, w.F64)],
+    exports: [w.ExportGlobal("ex", w.IndexInt("0"))],
+    ..,
+  )) = parse_module("(global (export \"ex\") (import \"mod\" \"glob\") f64)")
+}
+
 pub fn parse_module_type_test() {
   let assert Ok(w.Module(
     types: [
@@ -661,6 +670,13 @@ pub fn parse_module_exports_test() {
     ],
     ..,
   )) = parse_module("(export \"mem\" (memory 0)) (export \"fn\" (func $f))")
+}
+
+pub fn parse_module_tags_test() {
+  let assert Ok(w.Module(
+    tags: [w.Tag(Some("$t"), None, [w.Param(None, w.I32)], [])],
+    ..,
+  )) = parse_module("(tag $t (param i32))")
 }
 
 fn assert_lex_self_as(l, input, fun) {
