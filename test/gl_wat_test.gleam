@@ -647,6 +647,12 @@ pub fn parse_module_legacy_active_element_test() {
   let assert Ok(_) = parse_module("(elem (table 1) (i32.const 8) func 0 1 2)")
 }
 
+pub fn parse_module_start_function_test() {
+  let assert Ok(w.Module(start: Some(w.Start(w.IndexId("$start"))), ..)) =
+    parse_module("(start $start)")
+  let assert Error(_) = parse_module("(start $start) (start $again)")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

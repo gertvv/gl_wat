@@ -466,7 +466,7 @@ pub type Global {
   Global(
     id: Option(String),
     mutability: Mutability,
-    type_: ValueType,
+    value_type: ValueType,
     expr: List(Instruction),
   )
 }
@@ -539,7 +539,7 @@ pub type Import {
     import_name: String,
     id: Option(String),
     mutability: Mutability,
-    type_: ValueType,
+    value_type: ValueType,
   )
   ImportMemory(
     module_name: String,
@@ -682,16 +682,109 @@ fn decl_parser(
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   nibble.one_of([
     rec_type_parser() |> nibble.map(fn(rec) { #(ctx, [TypeDecl(rec)]) }),
-    // import
+    import_parser(ctx),
     global_parser() |> nibble.map(fn(glob) { #(ctx, glob) }),
     memory_parser(ctx),
     table_parser(ctx),
     func_parser(ctx),
     data_parser(ctx),
     element_parser(ctx),
-    // start
-  // export
+    start_parser(ctx),
+    // export
   ])
+}
+
+fn import_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("import")))
+  use module_name <- nibble.do(string_parser())
+  use import_name <- nibble.do(string_parser())
+  use import_ <- nibble.do(
+    nibble.one_of([
+      {
+        use _ <- nibble.do(nibble.token(LKeyword("tag")))
+        todo
+      },
+      {
+        use _ <- nibble.do(nibble.token(LKeyword("global")))
+        use id <- nibble.do(id_parser() |> nibble.optional)
+        use #(mutability, value_type) <- nibble.do(global_type_parser())
+        use _ <- nibble.do(nibble.token(RParen))
+        nibble.return(ImportGlobal(
+          module_name:,
+          import_name:,
+          id:,
+          mutability:,
+          value_type:,
+        ))
+      },
+      {
+        use _ <- nibble.do(nibble.token(LKeyword("memory")))
+        use id <- nibble.do(id_parser() |> nibble.optional)
+        use #(address_type, limits) <- nibble.do(memory_type_parser())
+        use _ <- nibble.do(nibble.token(RParen))
+        nibble.return(ImportMemory(
+          module_name:,
+          import_name:,
+          id:,
+          address_type:,
+          limits:,
+        ))
+      },
+      {
+        use _ <- nibble.do(nibble.token(LKeyword("table")))
+        use id <- nibble.do(id_parser() |> nibble.optional)
+        use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
+        use _ <- nibble.do(nibble.token(RParen))
+        nibble.return(ImportTable(
+          module_name:,
+          import_name:,
+          id:,
+          address_type:,
+          limits:,
+          ref_type:,
+        ))
+      },
+      {
+        use _ <- nibble.do(nibble.token(LKeyword("func")))
+        use id <- nibble.do(id_parser() |> nibble.optional)
+        use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+        use _ <- nibble.do(nibble.token(RParen))
+        nibble.return(ImportFunction(
+          module_name:,
+          import_name:,
+          id:,
+          type_:,
+          params:,
+          results:,
+        ))
+      },
+    ]),
+  )
+  use _ <- nibble.do(nibble.token(RParen))
+  let ctx = case import_ {
+    ImportGlobal(..) -> ParseContext(..ctx, globals: ctx.globals + 1)
+    ImportMemory(..) -> ParseContext(..ctx, memories: ctx.memories + 1)
+    ImportTable(..) -> ParseContext(..ctx, tables: ctx.tables + 1)
+    ImportFunction(..) -> ParseContext(..ctx, functions: ctx.functions + 1)
+  }
+  nibble.return(#(ctx, [ImportDecl(import_)]))
+}
+
+fn start_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("start")))
+  use function_index <- nibble.do(index_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  case ctx.start {
+    True -> nibble.fail("at most one start function may occur in a module")
+    False ->
+      nibble.return(
+        #(ParseContext(..ctx, start: True), [StartDecl(Start(function_index:))]),
+      )
+  }
 }
 
 fn element_parser(
@@ -762,9 +855,7 @@ fn table_parser(
     {
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser())
-      use address_type <- nibble.do(address_type_parser())
-      use limits <- nibble.do(limits_parser())
-      use ref_type <- nibble.do(ref_type_parser())
+      use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(
         #(ParseContext(..ctx, tables: ctx.tables + 1), [
@@ -848,6 +939,17 @@ fn table_parser(
       ])
     },
   ])
+}
+
+fn table_type_parser() -> nibble.Parser(
+  #(AddressType, Limits, RefType),
+  Token,
+  b,
+) {
+  use address_type <- nibble.do(address_type_parser())
+  use limits <- nibble.do(limits_parser())
+  use ref_type <- nibble.do(ref_type_parser())
+  nibble.return(#(address_type, limits, ref_type))
 }
 
 fn elem_list_parser(
@@ -963,8 +1065,7 @@ fn memory_parser(ctx: ParseContext) {
     {
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser())
-      use address_type <- nibble.do(address_type_parser())
-      use limits <- nibble.do(limits_parser())
+      use #(address_type, limits) <- nibble.do(memory_type_parser())
       nibble.return(
         #(ParseContext(..ctx, memories: ctx.memories + 1), [
           ImportDecl(ImportMemory(
@@ -1034,6 +1135,12 @@ fn memory_parser(ctx: ParseContext) {
   ])
 }
 
+fn memory_type_parser() -> nibble.Parser(#(AddressType, Limits), Token, b) {
+  use address_type <- nibble.do(address_type_parser())
+  use limits <- nibble.do(limits_parser())
+  nibble.return(#(address_type, limits))
+}
+
 fn limits_parser() -> nibble.Parser(Limits, Token, b) {
   use min <- nibble.do(int_parser())
   use max <- nibble.do(int_parser() |> nibble.optional)
@@ -1094,12 +1201,13 @@ fn address_type_parser() -> nibble.Parser(AddressType, Token, b) {
 }
 
 fn global_parser() -> nibble.Parser(List(Decl), Token, b) {
+  // TODO: inline imports
   use _ <- nibble.do(nibble.token(LKeyword("global")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  use #(mutability, type_) <- nibble.do(global_type_parser())
+  use #(mutability, value_type) <- nibble.do(global_type_parser())
   use expr <- nibble.do(expr_parser())
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return([GlobalDecl(Global(id:, mutability:, type_:, expr:))])
+  nibble.return([GlobalDecl(Global(id:, mutability:, value_type:, expr:))])
 }
 
 fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
