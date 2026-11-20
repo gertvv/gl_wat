@@ -686,7 +686,7 @@ fn decl_parser(
     global_parser() |> nibble.map(fn(glob) { #(ctx, glob) }),
     memory_parser(ctx),
     table_parser(ctx),
-    func_parser() |> nibble.map(fn(func) { #(ctx, [FunctionDecl(func)]) }),
+    func_parser(ctx),
     data_parser(ctx),
     // element
   // start
@@ -1169,33 +1169,55 @@ fn storage_type_parser() -> nibble.Parser(FieldType, Token, b) {
   ])
 }
 
-pub fn func_parser() {
+fn func_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("func")))
   use id <- nibble.do(id_parser() |> nibble.optional)
-  // TODO: exports
-  // TODO: import
-  use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
-  use locals <- nibble.do(nibble.many(local_parser()))
-  use expr <- nibble.do(
-    nibble.many(nibble.one_of([folded_instr_parser(), flat_instr_parser()])),
-  )
-  use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Function(
-    id,
-    type_,
-    params,
-    results,
-    list.flatten(locals),
-    list.flatten(expr),
+  use exports <- nibble.do(nibble.many(
+    inline_export_parser()
+    |> nibble.map(fn(name) {
+      ExportDecl(ExportFunction(name, IndexInt(int.to_string(ctx.functions))))
+    }),
   ))
+  nibble.one_of([
+    {
+      // import case
+      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, functions: ctx.functions + 1), [
+          ImportDecl(ImportFunction(
+            module_name:,
+            import_name:,
+            id:,
+            type_:,
+            params:,
+            results:,
+          )),
+          ..exports
+        ]),
+      )
+    },
+    {
+      // inline function
+      use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
+      use locals <- nibble.do(
+        nibble.many(local_parser()) |> nibble.map(list.flatten),
+      )
+      use expr <- nibble.do(expr_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, functions: ctx.functions + 1), [
+          FunctionDecl(Function(id:, type_:, params:, results:, locals:, expr:)),
+          ..exports
+        ]),
+      )
+    },
+  ])
 }
 
 fn instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
   basic_instr_parser(AnyInstr)
-}
-
-fn flat_instr_parser() {
-  basic_instr_parser(FlatInstr)
 }
 
 fn folded_instr_parser() -> nibble.Parser(List(Instruction), Token, a) {

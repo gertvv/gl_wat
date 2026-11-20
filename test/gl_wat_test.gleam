@@ -1,6 +1,7 @@
 import gl_wat as w
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import gleeunit
 import nibble
@@ -66,7 +67,23 @@ pub fn str_lexer_test() {
 pub fn parse_func(str) {
   let assert Ok(tokens) = lexer.run(str, w.lexer())
   let tokens = w.simplify(tokens)
-  nibble.run(tokens, w.func_parser())
+  nibble.run(tokens, w.module_parser())
+  |> result.map(fn(mod) {
+    let assert w.Module(
+      id: None,
+      types: [],
+      imports: [],
+      globals: [],
+      memories: [],
+      tables: [],
+      functions: [func],
+      datas: [],
+      elements: [],
+      start: None,
+      exports: [],
+    ) = mod
+    func
+  })
 }
 
 fn parse_module(str: String) {
@@ -556,6 +573,39 @@ pub fn parse_module_table_inline_import_export_test() {
   )) =
     parse_module(
       "(table $tbl (export \"exp\") (import \"mod\" \"imp\") 4 16 funcref)",
+    )
+}
+
+pub fn parse_module_function_inline_import_export_test() {
+  let assert Ok(w.Module(
+    imports: [
+      w.ImportFunction(
+        module_name: "mod",
+        import_name: "func",
+        id: None,
+        type_: None,
+        params: [],
+        results: [],
+      ),
+    ],
+    functions: [
+      w.Function(
+        id: None,
+        type_: None,
+        params: [],
+        results: [w.I32],
+        locals: [],
+        expr: [w.I32Const("0")],
+      ),
+    ],
+    exports: [
+      w.ExportFunction(name: "a", function_index: w.IndexInt("0")),
+      w.ExportFunction(name: "b", function_index: w.IndexInt("1")),
+    ],
+    ..,
+  )) =
+    parse_module(
+      "(func (export \"a\") (import \"mod\" \"func\")) (func (export \"b\") (result i32) i32.const 0)",
     )
 }
 
