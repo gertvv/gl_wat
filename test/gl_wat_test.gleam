@@ -375,16 +375,16 @@ pub fn select_test() {
 }
 
 pub fn parse_module_test() {
-  let assert Ok(w.Module(Some("$mod"), func: [], ..)) =
+  let assert Ok(w.Module(Some("$mod"), functions: [], ..)) =
     parse_module("(module $mod)")
 
-  let assert Ok(w.Module(func: [w.Function(expr: [w.Unreachable], ..)], ..)) =
+  let assert Ok(w.Module(functions: [w.Function(expr: [w.Unreachable], ..)], ..)) =
     parse_module("(module (func unreachable))")
 }
 
 pub fn parse_module_global_test() {
   let assert Ok(w.Module(
-    global: [
+    globals: [
       w.Global(Some("$g"), w.Mutable, w.I32, [w.I32Const("1")]),
       w.Global(None, w.Immutable, w.I64, [w.I64Const("3")]),
     ],
@@ -397,7 +397,7 @@ pub fn parse_module_global_test() {
 
 pub fn parse_module_type_test() {
   let assert Ok(w.Module(
-    rec_type: [
+    types: [
       w.RecType([
         w.TypeDef(
           id: Some("$s"),
@@ -418,6 +418,61 @@ pub fn parse_module_type_test() {
     ],
     ..,
   )) = parse_module("(type $s (struct (field $a i32) (field $b f32)))")
+}
+
+pub fn parse_module_memory_test() {
+  let assert Ok(w.Module(
+    memories: [w.Memory(None, w.Address32, w.Limits("4", Some("16")))],
+    ..,
+  )) = parse_module("(memory 4 16)")
+}
+
+pub fn parse_module_memory_with_data_test() {
+  let assert Ok(w.Module(
+    memories: [w.Memory(Some("$d"), w.Address32, w.Limits("1", Some("1")))],
+    datas: [
+      w.ActiveData(None, <<"hello there">>, w.IndexInt("0"), [w.I32Const("0")]),
+    ],
+    ..,
+  )) = parse_module("(memory $d i32 (data \"hello there\"))")
+}
+
+pub fn parse_module_second_memory_with_data_test() {
+  let assert Ok(w.Module(
+    memories: [
+      w.Memory(None, w.Address64, w.Limits("4", None)),
+      w.Memory(Some("$d"), w.Address32, w.Limits("1", Some("1"))),
+    ],
+    datas: [
+      w.ActiveData(None, <<"hello there">>, w.IndexInt("1"), [w.I32Const("0")]),
+    ],
+    ..,
+  )) = parse_module("(memory i64 4) (memory $d i32 (data \"hello there\"))")
+}
+
+pub fn parse_module_memory_inline_import_export_test() {
+  let assert Ok(w.Module(
+    imports: [
+      w.ImportMemory(
+        module_name: "mod",
+        import_name: "imp",
+        id: Some("$mem"),
+        address_type: w.Address32,
+        limits: w.Limits("4", Some("16")),
+      ),
+    ],
+    exports: [w.ExportMemory(name: "exp", memory_index: w.IndexInt("0"))],
+    ..,
+  )) =
+    parse_module("(memory $mem (export \"exp\") (import \"mod\" \"imp\") 4 16)")
+}
+
+pub fn parse_module_data_test() {
+  let assert Ok(w.Module(
+    memories: [w.Memory(None, w.Address32, w.Limits("1", None))],
+    datas: [w.ActiveData(None, <<"data">>, w.IndexInt("0"), [w.I32Const("12")])],
+    ..,
+  )) = parse_module("(memory 1) (data (memory 0) (i32.const 12) \"data\")")
 }
 
 fn assert_lex_self_as(l, input, fun) {

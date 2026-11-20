@@ -1,6 +1,9 @@
+import gleam/bit_array
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/regexp.{type Regexp}
+import gleam/string
 import nibble
 import nibble/lexer
 
@@ -44,6 +47,50 @@ pub fn lexer() {
     // TODO: annotations
     // TODO: the spec's definition of whitespace
     lexer.whitespace(Nil) |> lexer.ignore(),
+  ])
+}
+
+// lexes the content of a string
+pub fn string_lexer() {
+  let assert Ok(ucp_re) =
+    regexp.from_string("\\\\u{0x[0-9A-Fa-f](_?[0-9A-Fa-f])*}")
+  let assert Ok(hex_re) = regexp.from_string("\\\\([0-9A-Fa-f]{2})")
+  lexer.simple([
+    lexer.token("\\t", <<"\t">>),
+    lexer.token("\\n", <<"\n">>),
+    lexer.token("\\r", <<"\r">>),
+    lexer.token("\\\"", <<"\"">>),
+    lexer.token("\\'", <<"'">>),
+    lexer.token("\\\\", <<"\\">>),
+    lexer.custom(fn(mode, lexeme, _) {
+      case regexp.check(ucp_re, lexeme) {
+        True -> {
+          let assert Ok(bytes) =
+            lexeme
+            |> string.drop_start(5)
+            |> string.drop_end(1)
+            |> bit_array.base16_decode
+          lexer.Keep(bytes, mode)
+        }
+        False -> lexer.NoMatch
+      }
+    }),
+    lexer.custom(fn(mode, lexeme, _) {
+      case regexp.check(hex_re, lexeme) {
+        True -> {
+          let assert Ok(bytes) =
+            lexeme |> string.drop_start(1) |> bit_array.base16_decode
+          lexer.Keep(bytes, mode)
+        }
+        False -> lexer.NoMatch
+      }
+    }),
+    lexer.custom(fn(mode, lexeme, _) {
+      case lexeme {
+        "\\" <> _ -> lexer.NoMatch
+        str -> lexer.Keep(bit_array.from_string(str), mode)
+      }
+    }),
   ])
 }
 
@@ -424,24 +471,149 @@ pub type Global {
   )
 }
 
-/// Indicates wheter a field is mutable.
 pub type Mutability {
   Mutable
   Immutable
 }
 
+pub type Memory {
+  Memory(id: Option(String), address_type: AddressType, limits: Limits)
+}
+
+pub type Table {
+  Table(
+    id: Option(String),
+    address_type: AddressType,
+    limits: Limits,
+    ref_type: RefType,
+    expr: List(Instruction),
+  )
+}
+
+pub type AddressType {
+  Address32
+  Address64
+}
+
+pub type Limits {
+  Limits(min: String, max: Option(String))
+}
+
+pub type Data {
+  PassiveData(id: Option(String), data: BitArray)
+  ActiveData(
+    id: Option(String),
+    data: BitArray,
+    memory_index: Index,
+    offset: List(Instruction),
+  )
+}
+
+pub type Element {
+  PassiveElement(
+    id: Option(String),
+    ref_type: RefType,
+    elems: List(List(Instruction)),
+  )
+  ActiveElement(
+    id: Option(String),
+    ref_type: RefType,
+    elems: List(List(Instruction)),
+    table_index: Index,
+    offset: List(Instruction),
+  )
+  DeclarativeElement(
+    id: Option(String),
+    ref_type: RefType,
+    elems: List(List(Instruction)),
+  )
+}
+
+pub type Start {
+  Start(function_index: Index)
+}
+
+pub type Import {
+  ImportGlobal(
+    module_name: String,
+    import_name: String,
+    id: Option(String),
+    mutability: Mutability,
+    type_: ValueType,
+  )
+  ImportMemory(
+    module_name: String,
+    import_name: String,
+    id: Option(String),
+    address_type: AddressType,
+    limits: Limits,
+  )
+  ImportTable(
+    module_name: String,
+    import_name: String,
+    id: Option(String),
+    address_type: AddressType,
+    limits: Limits,
+    ref_type: RefType,
+  )
+  ImportFunction(
+    module_name: String,
+    import_name: String,
+    id: Option(String),
+    type_: Option(Index),
+    params: List(Param),
+    results: List(ValueType),
+  )
+}
+
+pub type Export {
+  ExportGlobal(name: String, global_index: Index)
+  ExportMemory(name: String, memory_index: Index)
+  ExportTable(name: String, table_index: Index)
+  ExportFunction(name: String, function_index: Index)
+}
+
 pub type Decl {
-  RecTypeDecl(RecType)
-  FuncDecl(Function)
+  TypeDecl(RecType)
+  ImportDecl(Import)
   GlobalDecl(Global)
+  MemoryDecl(Memory)
+  // TableDecl
+  FunctionDecl(Function)
+  DataDecl(Data)
+  // ElementDecl
+  // StartDecl
+  // ExportDecl
+  ExportDecl(Export)
 }
 
 pub type Module {
   Module(
     id: Option(String),
-    rec_type: List(RecType),
-    func: List(Function),
-    global: List(Global),
+    types: List(RecType),
+    imports: List(Import),
+    globals: List(Global),
+    memories: List(Memory),
+    tables: List(Table),
+    functions: List(Function),
+    datas: List(Data),
+    elements: List(Element),
+    start: Option(Start),
+    exports: List(Export),
+  )
+}
+
+type ParseContext {
+  ParseContext(
+    types: Int,
+    globals: Int,
+    memories: Int,
+    tables: Int,
+    functions: Int,
+    datas: Int,
+    elements: Int,
+    start: Bool,
+    non_import_defs: Bool,
   )
 }
 
@@ -450,40 +622,271 @@ pub fn module_parser() {
   use #(id, decl) <- nibble.do(case mod {
     Some(_) -> {
       use id <- nibble.do(nibble.optional(id_parser()))
-      use decl <- nibble.do(nibble.many(decl_parser()))
+      use decl <- nibble.do(module_declarations_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(#(id, decl))
     }
     None -> {
-      use decl <- nibble.do(nibble.many(decl_parser()))
+      use decl <- nibble.do(module_declarations_parser())
       nibble.return(#(None, decl))
     }
   })
   let mod =
-    list.flatten(decl)
-    |> list.fold(Module(id, rec_type: [], global: [], func: []), fn(mod, decl) {
-      case decl {
-        RecTypeDecl(rec_type) ->
-          Module(..mod, rec_type: [rec_type, ..mod.rec_type])
-        FuncDecl(func) -> Module(..mod, func: [func, ..mod.func])
-        GlobalDecl(global) -> Module(..mod, global: [global, ..mod.global])
-      }
-    })
-  Module(
-    ..mod,
-    rec_type: list.reverse(mod.rec_type),
-    func: list.reverse(mod.func),
-    global: list.reverse(mod.global),
-  )
+    list.fold(
+      decl,
+      Module(id, [], [], [], [], [], [], [], [], None, []),
+      fn(mod, decl) {
+        case decl {
+          TypeDecl(rec_type) -> Module(..mod, types: [rec_type, ..mod.types])
+          ImportDecl(import_) ->
+            Module(..mod, imports: [import_, ..mod.imports])
+          GlobalDecl(global) -> Module(..mod, globals: [global, ..mod.globals])
+          MemoryDecl(mem) -> Module(..mod, memories: [mem, ..mod.memories])
+          // TableDecl
+          FunctionDecl(func) ->
+            Module(..mod, functions: [func, ..mod.functions])
+          DataDecl(data) -> Module(..mod, datas: [data, ..mod.datas])
+          // ElementDecl
+          // StartDecl
+          ExportDecl(export) -> Module(..mod, exports: [export, ..mod.exports])
+        }
+      },
+    )
+  nibble.return(mod)
+}
+
+/// Returns all module declarations in reverse order
+fn module_declarations_parser() -> nibble.Parser(List(Decl), Token, b) {
+  let ctx = ParseContext(0, 0, 0, 0, 0, 0, 0, False, False)
+  use #(ctx, decl) <- nibble.loop(#(ctx, []))
+  use res <- nibble.do(decl_parser(ctx) |> nibble.optional)
+  case res {
+    Some(#(ctx, new_decl)) ->
+      nibble.Continue(#(ctx, rev_prepend(new_decl, decl)))
+    None -> nibble.Break(decl)
+  }
   |> nibble.return
 }
 
-fn decl_parser() -> nibble.Parser(List(Decl), Token, b) {
+/// Prepends the items to the list in reverse order: rev_prepend([2, 1], [3, 4]) -> [1, 2, 3, 4]
+fn rev_prepend(items: List(Decl), list: List(Decl)) -> List(Decl) {
+  case items {
+    [] -> list
+    [head, ..rest] -> rev_prepend(rest, [head, ..list])
+  }
+}
+
+fn decl_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   nibble.one_of([
-    rec_type_parser() |> nibble.map(fn(rec) { [RecTypeDecl(rec)] }),
-    func_parser() |> nibble.map(fn(func) { [FuncDecl(func)] }),
-    global_parser(),
+    rec_type_parser() |> nibble.map(fn(rec) { #(ctx, [TypeDecl(rec)]) }),
+    // import
+    global_parser() |> nibble.map(fn(glob) { #(ctx, glob) }),
+    memory_parser(ctx),
+    // table
+    func_parser() |> nibble.map(fn(func) { #(ctx, [FunctionDecl(func)]) }),
+    data_parser(ctx),
+    // element
+  // start
+  // export
   ])
+}
+
+fn data_parser(ctx: ParseContext) {
+  use _ <- nibble.do(nibble.token(LKeyword("data")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  nibble.one_of([
+    {
+      // passive data
+      use data <- nibble.do(string_bytes_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, datas: ctx.datas + 1), [
+          DataDecl(PassiveData(id:, data:)),
+        ]),
+      )
+    },
+    {
+      // active data
+      use memory_index <- nibble.do(nibble.or(
+        memory_use_parser(),
+        // abbreviation: 𝜖 -> (memory 0)
+        IndexInt("0"),
+      ))
+      use offset <- nibble.do(
+        nibble.one_of([
+          {
+            use _ <- nibble.do(nibble.token(LKeyword("offset")))
+            use expr <- nibble.do(nibble.many(instr_parser()))
+            use _ <- nibble.do(nibble.token(RParen))
+            nibble.return(list.flatten(expr))
+          },
+          // abbreviation: single folded instruction instead of (offset expr)
+          folded_instr_parser(),
+        ]),
+      )
+      use data <- nibble.do(string_bytes_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, datas: ctx.datas + 1), [
+          DataDecl(ActiveData(id:, data:, memory_index:, offset:)),
+        ]),
+      )
+    },
+  ])
+}
+
+fn memory_use_parser() -> nibble.Parser(Index, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("memory")))
+  use index <- nibble.do(index_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(index)
+}
+
+const page_size = 65_536
+
+fn memory_parser(ctx: ParseContext) {
+  use _ <- nibble.do(nibble.token(LKeyword("memory")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  use exports <- nibble.do(nibble.many(
+    inline_export_parser()
+    |> nibble.map(fn(name) {
+      ExportDecl(ExportMemory(name, IndexInt(int.to_string(ctx.memories))))
+    }),
+  ))
+  nibble.one_of([
+    {
+      // inline import case
+      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use address_type <- nibble.do(address_type_parser())
+      use limits <- nibble.do(limits_parser())
+      nibble.return(
+        #(ParseContext(..ctx, memories: ctx.memories + 1), [
+          ImportDecl(ImportMemory(
+            module_name:,
+            import_name:,
+            id:,
+            address_type:,
+            limits:,
+          )),
+          ..exports
+        ]),
+      )
+    },
+    {
+      use address_type <- nibble.do(address_type_parser())
+      nibble.one_of([
+        {
+          // inline data case
+          use _ <- nibble.do(nibble.token(LKeyword("data")))
+          use data <- nibble.do(string_bytes_parser())
+          let n = bit_array.byte_size(data)
+          let n =
+            { { n + page_size - 1 } / page_size }
+            |> int.to_string
+          use _ <- nibble.do(nibble.token(RParen))
+          use _ <- nibble.do(nibble.token(RParen))
+          nibble.return(
+            #(
+              ParseContext(
+                ..ctx,
+                memories: ctx.memories + 1,
+                datas: ctx.datas + 1,
+              ),
+              [
+                MemoryDecl(Memory(
+                  id:,
+                  address_type:,
+                  limits: Limits(n, Some(n)),
+                )),
+                DataDecl(
+                  ActiveData(
+                    id: None,
+                    data:,
+                    memory_index: IndexInt(ctx.memories |> int.to_string),
+                    offset: [
+                      I32Const("0"),
+                    ],
+                  ),
+                ),
+                ..exports
+              ],
+            ),
+          )
+        },
+        {
+          // plain memory case
+          use limits <- nibble.do(limits_parser())
+          use _ <- nibble.do(nibble.token(RParen))
+          nibble.return(
+            #(ParseContext(..ctx, memories: ctx.memories + 1), [
+              MemoryDecl(Memory(id:, address_type:, limits:)),
+            ]),
+          )
+        },
+      ])
+    },
+  ])
+}
+
+fn limits_parser() -> nibble.Parser(Limits, Token, b) {
+  use min <- nibble.do(int_parser())
+  use max <- nibble.do(int_parser() |> nibble.optional)
+  nibble.return(Limits(min:, max:))
+}
+
+fn inline_export_parser() -> nibble.Parser(String, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("export")))
+  use name <- nibble.do(string_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(name)
+}
+
+fn inline_import_parser() -> nibble.Parser(#(String, String), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("import")))
+  use mod_name <- nibble.do(string_parser())
+  use imp_name <- nibble.do(string_parser())
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(#(mod_name, imp_name))
+}
+
+fn string_parser() -> nibble.Parser(String, Token, b) {
+  use bytes <- nibble.do(string_bytes_parser())
+  case bit_array.to_string(bytes) {
+    Ok(str) -> nibble.return(str)
+    Error(_) -> nibble.fail("Invalid UTF-8")
+  }
+}
+
+fn string_bytes_parser() -> nibble.Parser(BitArray, Token, b) {
+  use token <- nibble.do(nibble.any())
+  use str <- nibble.do(case token {
+    String(str) -> nibble.return(str)
+    _ -> nibble.fail("Expected a String token")
+  })
+  let bytes = decode_string(str)
+  nibble.return(bytes)
+}
+
+fn decode_string(str: String) -> BitArray {
+  let assert Ok(data) =
+    str
+    |> string.drop_start(1)
+    |> string.drop_end(1)
+    |> lexer.run(string_lexer())
+  list.map(data, fn(t) { t.value })
+  |> bit_array.concat
+}
+
+fn address_type_parser() -> nibble.Parser(AddressType, Token, b) {
+  nibble.or(
+    nibble.one_of([
+      nibble.token(Keyword("i32")) |> nibble.replace(Address32),
+      nibble.token(Keyword("i64")) |> nibble.replace(Address64),
+    ]),
+    Address32,
+  )
 }
 
 fn global_parser() -> nibble.Parser(List(Decl), Token, b) {
@@ -539,12 +942,11 @@ fn sub_type_parser() -> nibble.Parser(
   nibble.one_of([
     {
       use _ <- nibble.do(nibble.token(LKeyword("sub")))
-      use sub <- nibble.do(
+      use sub <- nibble.do(nibble.or(
         nibble.token(Keyword("final"))
-        |> nibble.replace(Final)
-        |> nibble.optional
-        |> nibble.map(option.unwrap(_, Open)),
-      )
+          |> nibble.replace(Final),
+        Open,
+      ))
       use super <- nibble.do(nibble.many(index_parser()))
       use def <- nibble.do(comp_type_parser())
       nibble.return(#(sub, super, def))
