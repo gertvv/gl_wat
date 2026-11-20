@@ -475,6 +475,90 @@ pub fn parse_module_data_test() {
   )) = parse_module("(memory 1) (data (memory 0) (i32.const 12) \"data\")")
 }
 
+pub fn parse_module_table_test() {
+  let assert Ok(w.Module(
+    tables: [
+      w.Table(
+        Some("$t"),
+        w.Address32,
+        w.Limits("8", None),
+        w.Nullable(w.HeapAny),
+        [w.RefNull(w.HeapAny)],
+      ),
+    ],
+    ..,
+  )) = parse_module("(table $t 8 anyref)")
+}
+
+pub fn parse_module_table_non_null_requires_initializer_test() {
+  let assert Error(errs) = parse_module("(table $t 8 (ref any))")
+  let assert Ok(..) =
+    list.find(errs, fn(err) {
+      err.problem
+      == nibble.Custom("missing initialization expression for non-null reftype")
+    })
+}
+
+pub fn parse_module_table_initializer_test() {
+  let assert Ok(w.Module(
+    tables: [
+      w.Table(
+        None,
+        w.Address64,
+        w.Limits("8", Some("16")),
+        w.NonNull(w.HeapFunc),
+        [w.RefFunc(w.IndexId("$f"))],
+      ),
+    ],
+    ..,
+  )) = parse_module("(table i64 8 16 (ref func) ref.func $f)")
+}
+
+pub fn parse_module_table_inline_elem_test() {
+  let assert Ok(w.Module(
+    tables: [
+      _,
+      w.Table(
+        None,
+        w.Address32,
+        w.Limits("2", Some("2")),
+        w.Nullable(w.HeapFunc),
+        [w.RefNull(w.HeapFunc)],
+      ),
+    ],
+    elements: [
+      w.ActiveElement(
+        None,
+        w.NonNull(w.HeapFunc),
+        [[w.RefFunc(w.IndexId("$f"))], [w.RefFunc(w.IndexId("$g"))]],
+        w.IndexInt("1"),
+        [w.I32Const("0")],
+      ),
+    ],
+    ..,
+  )) = parse_module("(table 8 anyref) (table funcref (elem func $f $g))")
+}
+
+pub fn parse_module_table_inline_import_export_test() {
+  let assert Ok(w.Module(
+    imports: [
+      w.ImportTable(
+        module_name: "mod",
+        import_name: "imp",
+        id: Some("$tbl"),
+        address_type: w.Address32,
+        limits: w.Limits("4", Some("16")),
+        ref_type: w.Nullable(w.HeapFunc),
+      ),
+    ],
+    exports: [w.ExportTable(name: "exp", table_index: w.IndexInt("0"))],
+    ..,
+  )) =
+    parse_module(
+      "(table $tbl (export \"exp\") (import \"mod\" \"imp\") 4 16 funcref)",
+    )
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
