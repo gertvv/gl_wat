@@ -724,7 +724,7 @@ fn tag_parser(
   use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
   nibble.one_of([
     {
-      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(
@@ -783,13 +783,27 @@ fn import_parser(
   ctx: ParseContext,
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("import")))
+  use _ <- nibble.do(nibble.guard(
+    !ctx.non_import_defs,
+    "imports must occur before all non-import definitions",
+  ))
   use module_name <- nibble.do(string_parser())
   use import_name <- nibble.do(string_parser())
   use import_ <- nibble.do(
     nibble.one_of([
       {
         use _ <- nibble.do(nibble.token(LKeyword("tag")))
-        todo
+        use id <- nibble.do(id_parser() |> nibble.optional)
+        use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+        use _ <- nibble.do(nibble.token(RParen))
+        nibble.return(ImportTag(
+          module_name:,
+          import_name:,
+          id:,
+          type_:,
+          params:,
+          results:,
+        ))
       },
       {
         use _ <- nibble.do(nibble.token(LKeyword("global")))
@@ -944,7 +958,7 @@ fn table_parser(
   nibble.one_of([
     {
       // inline import case
-      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(
@@ -1153,7 +1167,7 @@ fn memory_parser(ctx: ParseContext) {
   nibble.one_of([
     {
       // inline import case
-      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits) <- nibble.do(memory_type_parser())
       nibble.return(
         #(ParseContext(..ctx, memories: ctx.memories + 1), [
@@ -1251,8 +1265,14 @@ fn inline_export_parser() -> nibble.Parser(String, Token, b) {
   nibble.return(name)
 }
 
-fn inline_import_parser() -> nibble.Parser(#(String, String), Token, b) {
+fn inline_import_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(String, String), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("import")))
+  use _ <- nibble.do(nibble.guard(
+    !ctx.non_import_defs,
+    "imports must occur before all non-import definitions",
+  ))
   use mod_name <- nibble.do(string_parser())
   use imp_name <- nibble.do(string_parser())
   use _ <- nibble.do(nibble.token(RParen))
@@ -1306,7 +1326,7 @@ fn global_parser(
   nibble.one_of([
     {
       // inline import case
-      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(mutability, value_type) <- nibble.do(global_type_parser())
       nibble.return(
         #(ParseContext(..ctx, globals: ctx.globals + 1), [
@@ -1470,7 +1490,7 @@ fn func_parser(ctx: ParseContext) {
   nibble.one_of([
     {
       // import case
-      use #(module_name, import_name) <- nibble.do(inline_import_parser())
+      use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(

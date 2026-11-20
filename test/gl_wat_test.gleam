@@ -517,12 +517,9 @@ pub fn parse_module_table_test() {
 }
 
 pub fn parse_module_table_non_null_requires_initializer_test() {
-  let assert Error(errs) = parse_module("(table $t 8 (ref any))")
-  let assert Ok(..) =
-    list.find(errs, fn(err) {
-      err.problem
-      == nibble.Custom("missing initialization expression for non-null reftype")
-    })
+  let assert Ok(_) =
+    parse_module("(table $t 8 (ref any))")
+    |> errors_include("missing initialization expression for non-null reftype")
 }
 
 pub fn parse_module_table_initializer_test() {
@@ -679,8 +676,29 @@ pub fn parse_module_tags_test() {
   )) = parse_module("(tag $t (param i32))")
 }
 
+pub fn no_imports_after_non_import_declarations_test() {
+  let msg = "imports must occur before all non-import definitions"
+  let assert Ok(_) =
+    parse_module("(tag $t) (import \"mod\" \"tag\" (tag $u))")
+    |> errors_include(msg)
+  let assert Ok(_) =
+    parse_module("(tag $t) (tag $u (import \"mod\" \"tag\"))")
+    |> errors_include(msg)
+  let assert Ok(_) =
+    parse_module("(table 3 funcref) (func $u (import \"mod\" \"fun\"))")
+    |> errors_include(msg)
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
   assert token.value == fun(input)
+}
+
+fn errors_include(res: Result(r, List(nibble.DeadEnd(a, b))), str) {
+  case res {
+    Error(errors) ->
+      list.find(errors, fn(err) { err.problem == nibble.Custom(str) })
+    _ -> Error(Nil)
+  }
 }
