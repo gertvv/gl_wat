@@ -22,3 +22,68 @@ Further documentation can be found at <https://hexdocs.pm/gl_wat>.
 gleam run   # Run the project
 gleam test  # Run the tests
 ```
+
+## Status
+
+The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-17-wasm-3.0/) text format specification.
+
+- [ ] Lexical format
+  - [x] Keyword tokens
+  - [x] Integer tokens
+  - [ ] Float tokens
+  - [x] String tokens
+  - [x] Regular ID tokens
+  - [ ] String ID tokens
+  - [ ] White space
+  - [x] Inline comments
+  - [ ] Block comments
+  - [ ] Annotations
+- [ ] Values
+  - [ ] Integer
+  - [ ] Float
+  - [x] String
+  - [ ] Names
+  - [ ] Identifiers
+- [ ] Types
+  - [x] Number types
+  - [ ] Vector types
+  - [x] Heap types
+  - [x] Reference types
+  - [x] Value types
+  - [x] Composite types
+  - [x] Recursive types
+  - [x] Address types
+  - [x] Limits
+  - [x] Tag types
+  - [x] Global types
+  - [x] Memory types
+  - [x] Table types
+  - [x] External types
+  - [x] Type uses
+- [ ] Instructions
+  - [ ] Labels
+  - [x] Parametric instructions
+  - [ ] Control instructions (missing: catch, throw)
+  - [x] Variable instructions
+  - [x] Table instructions
+  - [ ] Memory instructions (missing: vector load/store)
+  - [x] Reference instructions
+  - [x] Aggregate instructions
+  - [ ] Numeric instructions (missing: wrap, trunc, extend, demote, convert, reinterpret)
+  - [ ] Vector instructions
+  - [x] Folded instructions
+  - [x] Expressions
+- [ ] Modules
+  - [ ] Indices (missing: some checks?)
+  - [x] Types
+  - [x] Tags
+  - [x] Globals
+  - [x] Memories
+  - [x] Tables
+  - [x] Functions
+  - [x] Data
+  - [x] Element
+  - [x] Start
+  - [x] Imports
+  - [x] Exports
+  - [x] Modules
