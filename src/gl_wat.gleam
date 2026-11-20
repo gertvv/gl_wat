@@ -140,7 +140,8 @@ pub type HeapType {
   HeapNone
   HeapFunc
   HeapNoFunc
-  // TODO: exn, noexn
+  HeapExn
+  HeapNoExn
   HeapExtern
   HeapNoExtern
   HeapIndex(Index)
@@ -2082,6 +2083,8 @@ fn ref_type_parser() -> nibble.Parser(RefType, Token, a) {
     keyword_value_parser("nullref", Nullable(HeapNone)),
     keyword_value_parser("funcref", Nullable(HeapFunc)),
     keyword_value_parser("nullfuncref", Nullable(HeapNoFunc)),
+    keyword_value_parser("exnref", Nullable(HeapExn)),
+    keyword_value_parser("nullexnref", Nullable(HeapNoExn)),
     keyword_value_parser("externref", Nullable(HeapExtern)),
     keyword_value_parser("nullexternref", Nullable(HeapNoExtern)),
     full_ref_type_parser(),
@@ -2110,6 +2113,8 @@ fn heap_type_parser() -> nibble.Parser(HeapType, Token, a) {
     keyword_value_parser("none", HeapNone),
     keyword_value_parser("func", HeapFunc),
     keyword_value_parser("nofunc", HeapNoFunc),
+    keyword_value_parser("exn", HeapExn),
+    keyword_value_parser("noexn", HeapNoExn),
     keyword_value_parser("extern", HeapExtern),
     keyword_value_parser("noextern", HeapNoExtern),
     index_parser() |> nibble.map(HeapIndex),
