@@ -653,6 +653,16 @@ pub fn parse_module_start_function_test() {
   let assert Error(_) = parse_module("(start $start) (start $again)")
 }
 
+pub fn parse_module_exports_test() {
+  let assert Ok(w.Module(
+    exports: [
+      w.ExportMemory("mem", w.IndexInt("0")),
+      w.ExportFunction("fn", w.IndexId("$f")),
+    ],
+    ..,
+  )) = parse_module("(export \"mem\" (memory 0)) (export \"fn\" (func $f))")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

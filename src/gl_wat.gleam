@@ -567,6 +567,7 @@ pub type Import {
 }
 
 pub type Export {
+  // ExportTag
   ExportGlobal(name: String, global_index: Index)
   ExportMemory(name: String, memory_index: Index)
   ExportTable(name: String, table_index: Index)
@@ -690,8 +691,33 @@ fn decl_parser(
     data_parser(ctx),
     element_parser(ctx),
     start_parser(ctx),
-    // export
+    export_parser(ctx),
   ])
+}
+
+fn export_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("export")))
+  use export_name <- nibble.do(string_parser())
+  use export <- nibble.do(nibble.one_of(
+    // TODO: tag
+    [
+      #("global", ExportGlobal),
+      #("memory", ExportMemory),
+      #("table", ExportTable),
+      #("func", ExportFunction),
+    ]
+    |> list.map(fn(p) {
+      let #(name, constr) = p
+      use _ <- nibble.do(nibble.token(LKeyword(name)))
+      use index <- nibble.do(index_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(constr(export_name, index))
+    }),
+  ))
+  use _ <- nibble.do(nibble.token(RParen))
+  nibble.return(#(ctx, [ExportDecl(export)]))
 }
 
 fn import_parser(
