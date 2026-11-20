@@ -609,6 +609,44 @@ pub fn parse_module_function_inline_import_export_test() {
     )
 }
 
+pub fn parse_module_declarative_element_test() {
+  let assert Ok(w.Module(
+    elements: [
+      w.DeclarativeElement(
+        id: Some("$e"),
+        ref_type: w.NonNull(w.HeapFunc),
+        elems: [[w.RefFunc(w.IndexId("$f"))], [w.RefFunc(w.IndexId("$g"))]],
+      ),
+    ],
+    ..,
+  )) =
+    parse_module(
+      "(elem $e declare (ref func) (item ref.func $f) (item ref.func $g))",
+    )
+}
+
+pub fn parse_module_legacy_active_element_test() {
+  let assert Ok(w.Module(
+    elements: [
+      w.ActiveElement(
+        id: None,
+        ref_type: w.NonNull(w.HeapFunc),
+        elems: [
+          [w.RefFunc(w.IndexInt("0"))],
+          [w.RefFunc(w.IndexInt("1"))],
+          [w.RefFunc(w.IndexInt("2"))],
+        ],
+        table_index: w.IndexInt("0"),
+        offset: [w.I32Const("8")],
+      ),
+    ],
+    ..,
+  )) = parse_module("(elem (i32.const 8) 0 1 2)")
+
+  let assert Error(_) = parse_module("(elem (table 1) (i32.const 8) 0 1 2)")
+  let assert Ok(_) = parse_module("(elem (table 1) (i32.const 8) func 0 1 2)")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input

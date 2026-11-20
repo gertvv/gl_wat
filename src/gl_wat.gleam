@@ -688,9 +688,62 @@ fn decl_parser(
     table_parser(ctx),
     func_parser(ctx),
     data_parser(ctx),
-    // element
-  // start
+    element_parser(ctx),
+    // start
   // export
+  ])
+}
+
+fn element_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword("elem")))
+  use id <- nibble.do(id_parser() |> nibble.optional)
+  nibble.one_of([
+    {
+      // declarative element
+      use _ <- nibble.do(nibble.token(Keyword("declare")))
+      use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, elements: ctx.elements + 1), [
+          ElementDecl(DeclarativeElement(id:, ref_type:, elems:)),
+        ]),
+      )
+    },
+    {
+      // passive element
+      use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(
+        #(ParseContext(..ctx, elements: ctx.elements + 1), [
+          ElementDecl(PassiveElement(id:, ref_type:, elems:)),
+        ]),
+      )
+    },
+    {
+      // active element
+      use table_index <- nibble.do(use_parser("table") |> nibble.optional)
+      use offset <- nibble.do(offset_parser())
+      // if table use is omitted, the func keyword can be omitted as well
+      use #(ref_type, elems) <- nibble.do(
+        elem_list_parser(option.is_none(table_index)),
+      )
+      use _ <- nibble.do(nibble.token(RParen))
+      // abbreviation: 𝜖 -> (table 0)
+      let table_index = option.unwrap(table_index, IndexInt("0"))
+      nibble.return(
+        #(ParseContext(..ctx, elements: ctx.elements + 1), [
+          ElementDecl(ActiveElement(
+            id:,
+            ref_type:,
+            elems:,
+            table_index:,
+            offset:,
+          )),
+        ]),
+      )
+    },
   ])
 }
 
@@ -734,7 +787,7 @@ fn table_parser(
           // inline elem case
           use ref_type <- nibble.do(ref_type_parser())
           use _ <- nibble.do(nibble.token(LKeyword("elem")))
-          use #(elem_ref_type, elems) <- nibble.do(parse_elem_list())
+          use #(elem_ref_type, elems) <- nibble.do(elem_list_parser(False))
           let n = list.length(elems) |> int.to_string
           let limits = Limits(n, Some(n))
           use expr <- nibble.do(case ref_type {
@@ -797,11 +850,9 @@ fn table_parser(
   ])
 }
 
-fn parse_elem_list() -> nibble.Parser(
-  #(RefType, List(List(Instruction))),
-  Token,
-  b,
-) {
+fn elem_list_parser(
+  omit_func: Bool,
+) -> nibble.Parser(#(RefType, List(List(Instruction))), Token, b) {
   nibble.one_of([
     {
       // explicit ref_type and items case
@@ -824,7 +875,15 @@ fn parse_elem_list() -> nibble.Parser(
     },
     {
       // function indices case
-      use _ <- nibble.do(nibble.token(Keyword("func")))
+      // for backwards compatibility, if the table use is omitted in an active element section, the 'func' keyword can
+      // be omitted as well
+      use _ <- nibble.do(case omit_func {
+        True ->
+          nibble.token(Keyword("func"))
+          |> nibble.optional
+          |> nibble.map(option.unwrap(_, Nil))
+        False -> nibble.token(Keyword("func"))
+      })
       use indices <- nibble.do(nibble.many(index_parser()))
       let items = list.map(indices, fn(index) { [RefFunc(index)] })
       nibble.return(#(NonNull(HeapFunc), items))
@@ -853,22 +912,11 @@ fn data_parser(ctx: ParseContext) {
     {
       // active data
       use memory_index <- nibble.do(nibble.or(
-        memory_use_parser(),
+        use_parser("memory"),
         // abbreviation: 𝜖 -> (memory 0)
         IndexInt("0"),
       ))
-      use offset <- nibble.do(
-        nibble.one_of([
-          {
-            use _ <- nibble.do(nibble.token(LKeyword("offset")))
-            use expr <- nibble.do(expr_parser())
-            use _ <- nibble.do(nibble.token(RParen))
-            nibble.return(expr)
-          },
-          // abbreviation: single folded instruction instead of (offset expr)
-          folded_instr_parser(),
-        ]),
-      )
+      use offset <- nibble.do(offset_parser())
       use data <- nibble.do(string_bytes_parser())
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(
@@ -880,8 +928,21 @@ fn data_parser(ctx: ParseContext) {
   ])
 }
 
-fn memory_use_parser() -> nibble.Parser(Index, Token, b) {
-  use _ <- nibble.do(nibble.token(LKeyword("memory")))
+fn offset_parser() -> nibble.Parser(List(Instruction), Token, b) {
+  nibble.one_of([
+    {
+      use _ <- nibble.do(nibble.token(LKeyword("offset")))
+      use expr <- nibble.do(expr_parser())
+      use _ <- nibble.do(nibble.token(RParen))
+      nibble.return(expr)
+    },
+    // abbreviation: single folded instruction instead of (offset expr)
+    folded_instr_parser(),
+  ])
+}
+
+fn use_parser(name: String) -> nibble.Parser(Index, Token, b) {
+  use _ <- nibble.do(nibble.token(LKeyword(name)))
   use index <- nibble.do(index_parser())
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(index)
