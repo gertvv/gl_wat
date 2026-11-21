@@ -42,14 +42,21 @@ pub fn lex_invalid_concat_test() {
 pub fn int_lexer_test() {
   let valid_ints = "-12 +1_000 -1_2_3 12_345 +0x1F -0x1e 0xaaa_bbbb"
   let assert Ok(res) = lexer.run(valid_ints, w.lexer())
-  assert list.map(res, fn(token) { token.lexeme })
-    == string.split(valid_ints, " ")
-  assert list.all(res, fn(token) {
-    case token.value {
-      w.Integer(_) -> True
-      _ -> False
-    }
-  })
+  let expected = string.split(valid_ints, " ") |> list.map(w.Integer)
+  let actual = list.map(res, fn(token) { token.value })
+  assert actual == expected
+}
+
+pub fn float_lexer_test() {
+  let l = w.lexer()
+  let valid_floats =
+    "0.0 1_000.000_1 3. 4e-7 0xf.0e -0xAAA_BBBp-3 +inf -nan nan:0x1F"
+  let assert Ok(res) = lexer.run(valid_floats, l)
+  let expected = string.split(valid_floats, " ") |> list.map(w.Float)
+  let actual = list.map(res, fn(token) { token.value })
+  assert expected == actual
+  let assert Error(_) = lexer.run("0x0.eP", l)
+  let assert Error(_) = lexer.run(".3e3", l)
 }
 
 pub fn str_lexer_test() {
@@ -64,33 +71,13 @@ pub fn str_lexer_test() {
   assert_lex_self_as(l, "\"\\5c\\00\"", w.String)
 }
 
-pub fn parse_func(str) {
-  let assert Ok(tokens) = lexer.run(str, w.lexer())
-  let tokens = w.simplify(tokens)
-  nibble.run(tokens, w.module_parser())
-  |> result.map(fn(mod) {
-    let assert w.Module(
-      id: None,
-      types: [],
-      imports: [],
-      tags: [],
-      globals: [],
-      memories: [],
-      tables: [],
-      functions: [func],
-      datas: [],
-      elements: [],
-      start: None,
-      exports: [],
-    ) = mod
-    func
-  })
-}
-
-fn parse_module(str: String) {
-  let assert Ok(tokens) = lexer.run(str, w.lexer())
-  let tokens = w.simplify(tokens)
-  nibble.run(tokens, w.module_parser())
+pub fn id_lexer_test() {
+  let l = w.lexer()
+  assert_lex_self_as(l, "$id", w.Id)
+  assert_lex_self_as(l, "$info+test@example.com", w.Id)
+  assert_lex_self_as(l, "$a/b#c\\d|c^$", w.Id)
+  assert_lex_self_as(l, "$\"\"", w.Id)
+  assert_lex_self_as(l, "$\"\\u{0x263a}\"", w.Id)
 }
 
 pub fn parse_func_empty_test() {
@@ -701,4 +688,33 @@ fn errors_include(res: Result(r, List(nibble.DeadEnd(a, b))), str) {
       list.find(errors, fn(err) { err.problem == nibble.Custom(str) })
     _ -> Error(Nil)
   }
+}
+
+fn parse_func(str) {
+  let assert Ok(tokens) = lexer.run(str, w.lexer())
+  let tokens = w.simplify(tokens)
+  nibble.run(tokens, w.module_parser())
+  |> result.map(fn(mod) {
+    let assert w.Module(
+      id: None,
+      types: [],
+      imports: [],
+      tags: [],
+      globals: [],
+      memories: [],
+      tables: [],
+      functions: [func],
+      datas: [],
+      elements: [],
+      start: None,
+      exports: [],
+    ) = mod
+    func
+  })
+}
+
+fn parse_module(str: String) {
+  let assert Ok(tokens) = lexer.run(str, w.lexer())
+  let tokens = w.simplify(tokens)
+  nibble.run(tokens, w.module_parser())
 }

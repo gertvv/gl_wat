@@ -19,26 +19,55 @@ pub type Token {
   // Reserved
 }
 
-const idchar = "[0-9A-Za-z!#$%&'*+-\\./:<=>?@\\^_`|~]"
+const idchar = "[0-9A-Za-z!#$%&'*+-\\./:<=>?@\\\\^_`|~]"
+
+const strpat =
+  "\"([^\\x00-\\x19\\x7f\"\\\\]|\\\\t|\\\\n|\\\\r|\\\\\"|\\\\'|\\\\|\\\\u{0x[0-9A-Fa-f](_?[0-9A-Fa-f])*}|\\\\([0-9A-Fa-f]{2}))*\""
+
+const hexnum = "[0-9A-Fa-f](_?[0-9A-Fa-f])*"
+
+const decnum = "[0-9](_?[0-9])*"
 
 pub fn lexer() {
   let assert Ok(int_re) =
+    regexp.from_string("^[+-]?((0x" <> hexnum <> ")|(" <> decnum <> "))$")
+  let assert Ok(decfloat_re) =
     regexp.from_string(
-      "^[+-]?(0x[0-9A-Fa-f](_?[0-9A-Fa-f])*)|(^[+-]?[0-9](_?[0-9])*$)$",
+      "^[+-]?"
+      <> decnum
+      <> "(\\.("
+      <> decnum
+      <> ")?)?([Ee][+-]?"
+      <> decnum
+      <> ")?$",
     )
-  let assert Ok(str_re) =
+  let assert Ok(hexfloat_re) =
     regexp.from_string(
-      "\"([^\\x00-\\x19\\x7f\"\\\\]|\\\\t|\\\\n|\\\\r|\\\\\"|\\\\'|\\\\|\\\\u{0x[0-9A-Fa-f](_?[0-9A-Fa-f])*}|\\\\([0-9A-Fa-f]{2}))*\"",
+      "^[+-]?0x"
+      <> hexnum
+      <> "(\\.("
+      <> hexnum
+      <> ")?)?([Pp][+-]?"
+      <> hexnum
+      <> ")?$",
     )
+  let assert Ok(nanfloat_re) =
+    regexp.from_string("^[+-]?(inf|nan(:0x" <> hexnum <> ")?)")
+  let assert Ok(str_re) = regexp.from_string(strpat)
   let assert Ok(keyword_re) = regexp.from_string("^[a-z]" <> idchar <> "*$")
   let assert Ok(id_re) = regexp.from_string("^[$]" <> idchar <> "+$")
+  let assert Ok(name_id_re) = regexp.from_string("^[$]" <> strpat)
 
   lexer.simple([
-    separated_token(keyword_re, Keyword),
     // TODO: name-style IDs
     separated_token(id_re, Id),
+    separated_token(name_id_re, Id),
     separated_token(int_re, Integer),
-    // TODO: float
+    separated_token(decfloat_re, Float),
+    separated_token(hexfloat_re, Float),
+    // TODO: worry about overlap between inf/nan and keywords?
+    separated_token(nanfloat_re, Float),
+    separated_token(keyword_re, Keyword),
     separated_token(str_re, String),
     lexer.token("(", LParen),
     lexer.token(")", RParen),
@@ -53,7 +82,7 @@ pub fn lexer() {
 // lexes the content of a string
 pub fn string_lexer() {
   let assert Ok(ucp_re) =
-    regexp.from_string("\\\\u{0x[0-9A-Fa-f](_?[0-9A-Fa-f])*}")
+    regexp.from_string("\\\\u{x[0-9A-Fa-f](_?[0-9A-Fa-f])*}")
   let assert Ok(hex_re) = regexp.from_string("\\\\([0-9A-Fa-f]{2})")
   lexer.simple([
     lexer.token("\\t", <<"\t">>),
