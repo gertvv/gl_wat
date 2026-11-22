@@ -3,6 +3,7 @@ import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/pair
 import gleam/regexp.{type Regexp}
 import gleam/result
 import gleam/string
@@ -666,12 +667,13 @@ pub type IdContext {
     datas: Dict(String, Int),
     elements: Dict(String, Int),
     locals: Dict(String, Int),
+    labels: List(String),
   )
 }
 
 fn empty_id_context() {
   let e = dict.new()
-  IdContext(e, e, e, e, e, e, e, e, e)
+  IdContext(e, e, e, e, e, e, e, e, e, [])
 }
 
 type ParseContext {
@@ -2478,26 +2480,48 @@ fn resolve_ids_field_type(
 }
 
 fn resolve_ids_expr(expr: List(Instruction), ctx: IdContext) {
-  list.try_map(expr, resolve_ids_instr(_, ctx))
+  list.try_fold(expr, #(ctx, []), fn(acc, instr) {
+    let #(ctx, instrs) = acc
+    use instr <- result.map(resolve_ids_instr(instr, ctx))
+    let ctx = case instr {
+      Block(label:, ..) | Loop(label:, ..) | If(label:, ..) ->
+        IdContext(..ctx, labels: [option.unwrap(label, ""), ..ctx.labels])
+      End(..) -> IdContext(..ctx, labels: list.drop(ctx.labels, 1))
+      _ -> ctx
+    }
+    #(ctx, [instr, ..instrs])
+  })
+  |> result.map(pair.second)
+  |> result.map(list.reverse)
 }
 
 fn resolve_ids_instr(
   instr: Instruction,
   ctx: IdContext,
 ) -> Result(Instruction, String) {
-  // TODO: resolve branch labels (?)
   case instr {
     Unreachable | Nop -> Ok(instr)
     Block(label:, block_type:) ->
       result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
     Loop(label:, block_type:) ->
-      result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
+      result.map(resolve_ids_block_type(block_type, ctx), Loop(label, _))
     If(label:, block_type:) ->
-      result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
-    Else(..) | End(..) -> Ok(instr)
-    Branch(label_index: _) -> todo
-    BranchIf(label_index: _) -> todo
-    BranchTable(label_indices: _, default_label_index: _) -> todo
+      result.map(resolve_ids_block_type(block_type, ctx), If(label, _))
+    Else(label:) -> result.replace(check_block_label(label, ctx, "else"), instr)
+    End(label:) -> result.replace(check_block_label(label, ctx, "end"), instr)
+    Branch(label_index:) -> result.map(resolve_label(label_index, ctx), Branch)
+    BranchIf(label_index:) ->
+      result.map(resolve_label(label_index, ctx), BranchIf)
+    BranchTable(label_indices:, default_label_index:) -> {
+      use label_indices <- result.try(
+        list.try_map(label_indices, resolve_label(_, ctx)),
+      )
+      use default_label_index <- result.map(resolve_label(
+        default_label_index,
+        ctx,
+      ))
+      BranchTable(label_indices:, default_label_index:)
+    }
     Return -> Ok(instr)
     Call(function_index:) ->
       result.map(resolve_function(function_index, ctx), Call)
@@ -2528,10 +2552,22 @@ fn resolve_ids_instr(
     CallRef(type_index:) -> result.map(resolve_type(type_index, ctx), CallRef)
     ReturnCallRef(type_index:) ->
       result.map(resolve_type(type_index, ctx), ReturnCallRef)
-    BranchOnNull(label_index: _) -> todo
-    BranchOnNonNull(label_index: _) -> todo
-    BranchOnCast(label_index: _, from_ref_type: _, to_ref_type: _) -> todo
-    BranchOnCastFail(label_index: _, from_ref_type: _, to_ref_type: _) -> todo
+    BranchOnNull(label_index:) ->
+      result.map(resolve_label(label_index, ctx), BranchOnNull)
+    BranchOnNonNull(label_index:) ->
+      result.map(resolve_label(label_index, ctx), BranchOnNonNull)
+    BranchOnCast(label_index:, from_ref_type:, to_ref_type:) -> {
+      use label_index <- result.try(resolve_label(label_index, ctx))
+      use from_ref_type <- result.try(resolve_ids_ref_type(from_ref_type, ctx))
+      use to_ref_type <- result.map(resolve_ids_ref_type(to_ref_type, ctx))
+      BranchOnCast(label_index:, from_ref_type:, to_ref_type:)
+    }
+    BranchOnCastFail(label_index:, from_ref_type:, to_ref_type:) -> {
+      use label_index <- result.try(resolve_label(label_index, ctx))
+      use from_ref_type <- result.try(resolve_ids_ref_type(from_ref_type, ctx))
+      use to_ref_type <- result.map(resolve_ids_ref_type(to_ref_type, ctx))
+      BranchOnCast(label_index:, from_ref_type:, to_ref_type:)
+    }
     RefNull(heap_type:) ->
       result.map(resolve_ids_heap_type(heap_type, ctx), RefNull)
     RefFunc(function_index:) ->
@@ -2782,6 +2818,21 @@ fn resolve_ids_instr(
   }
 }
 
+fn check_block_label(
+  label: Option(String),
+  ctx: IdContext,
+  instr_name: String,
+) -> Result(Nil, String) {
+  case label, ctx.labels {
+    _, [] -> Error("unexpected " <> instr_name)
+    Some(label), [top, ..] if label != top ->
+      Error(
+        instr_name <> " label " <> label <> " does not match top label " <> top,
+      )
+    _, _ -> Ok(Nil)
+  }
+}
+
 fn resolve_ids_block_type(
   block_type: BlockType,
   ctx: IdContext,
@@ -2846,6 +2897,18 @@ fn resolve_element(
 
 fn resolve_local(local_index: Index, ctx: IdContext) -> Result(Index, String) {
   resolve_id(local_index, ctx.locals, "local")
+}
+
+fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Index, String) {
+  case label_index {
+    IndexInt(_) -> Ok(label_index)
+    IndexId(id) ->
+      list.index_map(ctx.labels, fn(l, i) { #(int.to_string(i), l) })
+      |> list.find(fn(p) { pair.second(p) == id })
+      |> result.map(pair.first)
+      |> result.map(IndexInt)
+      |> result.replace_error("label not found: " <> id)
+  }
 }
 
 fn resolve_id_optional(

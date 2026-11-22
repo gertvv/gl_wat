@@ -704,6 +704,29 @@ pub fn resolve_local_ids_test() {
     )
 }
 
+pub fn resolve_branch_ids_test() {
+  let assert Ok(w.Module(
+    functions: [
+      w.Function(
+        expr: [
+          w.Loop(Some("$outer"), w.BlockEmpty),
+          w.Block(Some("$inner"), w.BlockEmpty),
+          w.Branch(w.IndexInt("1")),
+          w.Branch(w.IndexInt("0")),
+          w.End(None),
+          w.Branch(w.IndexInt("0")),
+          w.End(None),
+        ],
+        ..,
+      ),
+    ],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(func (loop $outer (block $inner (br $outer) (br $inner)) (br $outer)))",
+    )
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
