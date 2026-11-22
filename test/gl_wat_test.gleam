@@ -1,6 +1,7 @@
 import gl_wat as w
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/pair
 import gleam/result
 import gleam/string
 import gleeunit
@@ -676,6 +677,16 @@ pub fn no_imports_after_non_import_declarations_test() {
     |> errors_include(msg)
 }
 
+pub fn resolve_func_ids_test() {
+  let assert Ok(w.Module(
+    functions: [
+      w.Function(id: Some("$f"), expr: [w.Call(w.IndexInt("1"))], ..),
+      w.Function(id: Some("$g"), expr: [w.Call(w.IndexInt("0"))], ..),
+    ],
+    ..,
+  )) = parse_and_resolve_module("(func $f (call $g)) (func $g (call $f))")
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
@@ -694,6 +705,7 @@ fn parse_func(str) {
   let assert Ok(tokens) = lexer.run(str, w.lexer())
   let tokens = w.simplify(tokens)
   nibble.run(tokens, w.module_parser())
+  |> result.map(pair.first)
   |> result.map(fn(mod) {
     let assert w.Module(
       id: None,
@@ -716,5 +728,12 @@ fn parse_func(str) {
 fn parse_module(str: String) {
   let assert Ok(tokens) = lexer.run(str, w.lexer())
   let tokens = w.simplify(tokens)
-  nibble.run(tokens, w.module_parser())
+  nibble.run(tokens, w.module_parser()) |> result.map(pair.first)
+}
+
+fn parse_and_resolve_module(str: String) {
+  let assert Ok(tokens) = lexer.run(str, w.lexer())
+  let tokens = w.simplify(tokens)
+  let assert Ok(#(mod, ctx)) = nibble.run(tokens, w.module_parser())
+  w.resolve_indices(mod, ctx)
 }

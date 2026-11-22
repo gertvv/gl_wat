@@ -1,8 +1,10 @@
 import gleam/bit_array
+import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/regexp.{type Regexp}
+import gleam/result
 import gleam/string
 import nibble
 import nibble/lexer
@@ -196,6 +198,7 @@ pub type Function {
   )
 }
 
+// TODO: maybe just keep BlockTypeUse?
 pub type BlockType {
   BlockTypeUse(
     type_: Option(Index),
@@ -207,7 +210,7 @@ pub type BlockType {
 }
 
 pub type RecType {
-  RecType(List(TypeDef))
+  RecType(defs: List(TypeDef))
 }
 
 pub type TypeDef {
@@ -221,8 +224,8 @@ pub type SubType {
 
 pub type CompType {
   Struct(fields: List(Field))
-  Array(FieldType)
-  Func(params: List(Param), result: List(ValueType))
+  Array(item_type: FieldType)
+  Func(params: List(Param), results: List(ValueType))
 }
 
 pub type Field {
@@ -256,6 +259,7 @@ pub type Instruction {
   Call(function_index: Index)
   CallIndirect(
     table_index: Index,
+    // TODO: instead mint a type if only params + results given?
     type_: Option(Index),
     params: List(ValueType),
     results: List(ValueType),
@@ -263,6 +267,7 @@ pub type Instruction {
   ReturnCall(function_index: Index)
   ReturnCallIndirect(
     table_index: Index,
+    // TODO: instead mint a type if only params + results given?
     type_: Option(Index),
     params: List(ValueType),
     results: List(ValueType),
@@ -651,6 +656,24 @@ pub type Module {
   )
 }
 
+pub type IdContext {
+  IdContext(
+    types: Dict(String, Int),
+    tags: Dict(String, Int),
+    globals: Dict(String, Int),
+    memories: Dict(String, Int),
+    tables: Dict(String, Int),
+    functions: Dict(String, Int),
+    datas: Dict(String, Int),
+    elements: Dict(String, Int),
+  )
+}
+
+fn empty_id_context() {
+  let e = dict.new()
+  IdContext(e, e, e, e, e, e, e, e)
+}
+
 type ParseContext {
   ParseContext(
     types: Int,
@@ -662,14 +685,14 @@ type ParseContext {
     datas: Int,
     elements: Int,
     start: Bool,
-    // TODO: prevent imports after non-import tags, globals, memories, tables, or functions
     non_import_defs: Bool,
+    ids: IdContext,
   )
 }
 
 pub fn module_parser() {
   use mod <- nibble.do(nibble.optional(nibble.token(LKeyword("module"))))
-  use #(id, decl) <- nibble.do(case mod {
+  use #(id, #(ctx, decl)) <- nibble.do(case mod {
     Some(_) -> {
       use id <- nibble.do(nibble.optional(id_parser()))
       use decl <- nibble.do(module_declarations_parser())
@@ -704,18 +727,19 @@ pub fn module_parser() {
         }
       },
     )
-  nibble.return(mod)
+  nibble.return(#(mod, ctx))
 }
 
 /// Returns all module declarations in reverse order
-fn module_declarations_parser() -> nibble.Parser(List(Decl), Token, b) {
-  let ctx = ParseContext(0, 0, 0, 0, 0, 0, 0, 0, False, False)
+fn module_declarations_parser() {
+  let ctx =
+    ParseContext(0, 0, 0, 0, 0, 0, 0, 0, False, False, empty_id_context())
   use #(ctx, decl) <- nibble.loop(#(ctx, []))
   use res <- nibble.do(decl_parser(ctx) |> nibble.optional)
   case res {
     Some(#(ctx, new_decl)) ->
       nibble.Continue(#(ctx, rev_prepend(new_decl, decl)))
-    None -> nibble.Break(decl)
+    None -> nibble.Break(#(ctx.ids, decl))
   }
   |> nibble.return
 }
@@ -731,24 +755,143 @@ fn rev_prepend(items: List(Decl), list: List(Decl)) -> List(Decl) {
 fn decl_parser(
   ctx: ParseContext,
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
-  nibble.one_of([
-    rec_type_parser() |> nibble.map(fn(rec) { #(ctx, [TypeDecl(rec)]) }),
-    import_parser(ctx),
-    tag_parser(ctx),
-    global_parser(ctx),
-    memory_parser(ctx),
-    table_parser(ctx),
-    func_parser(ctx),
-    data_parser(ctx),
-    element_parser(ctx),
-    start_parser(ctx),
-    export_parser(ctx),
-  ])
+  use decls <- nibble.do(
+    nibble.one_of([
+      rec_type_parser(),
+      import_parser(ctx),
+      tag_parser(ctx),
+      global_parser(ctx),
+      memory_parser(ctx),
+      table_parser(ctx),
+      func_parser(ctx),
+      data_parser(),
+      element_parser(),
+      start_parser(ctx),
+      export_parser(),
+    ]),
+  )
+  nibble.return(#(update_context(ctx, decls), decls))
 }
 
-fn tag_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn update_context(ctx: ParseContext, decls: List(Decl)) -> ParseContext {
+  list.fold(decls, ctx, fn(ctx, decl) {
+    case decl {
+      TypeDecl(rec_type) -> {
+        list.fold(rec_type.defs, ctx, fn(ctx, t) { new_type(ctx, t.id) })
+      }
+      ImportDecl(value) ->
+        case value {
+          ImportTag(id:, ..) -> new_tag(ctx, id)
+          ImportGlobal(id:, ..) -> new_global(ctx, id)
+          ImportMemory(id:, ..) -> new_memory(ctx, id)
+          ImportTable(id:, ..) -> new_table(ctx, id)
+          ImportFunction(id:, ..) -> new_function(ctx, id)
+        }
+      TagDecl(tag) -> new_tag(ctx, tag.id) |> non_import
+      GlobalDecl(global) -> new_global(ctx, global.id) |> non_import
+      MemoryDecl(memory) -> new_memory(ctx, memory.id) |> non_import
+      TableDecl(table) -> new_table(ctx, table.id) |> non_import
+      FunctionDecl(function) -> new_function(ctx, function.id) |> non_import
+      DataDecl(data) -> new_data(ctx, data.id)
+      ElementDecl(element) -> new_element(ctx, element.id)
+      StartDecl(_) -> ParseContext(..ctx, start: True)
+      ExportDecl(_) -> ctx
+    }
+  })
+}
+
+fn new_type(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    types: ctx.types + 1,
+    ids: IdContext(..ctx.ids, types: assign_id(ctx.ids.types, id, ctx.types)),
+  )
+}
+
+fn new_tag(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    tags: ctx.tags + 1,
+    ids: IdContext(..ctx.ids, tags: assign_id(ctx.ids.tags, id, ctx.tags)),
+  )
+}
+
+fn new_global(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    globals: ctx.globals + 1,
+    ids: IdContext(
+      ..ctx.ids,
+      globals: assign_id(ctx.ids.globals, id, ctx.globals),
+    ),
+  )
+}
+
+fn new_memory(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    memories: ctx.memories + 1,
+    ids: IdContext(
+      ..ctx.ids,
+      memories: assign_id(ctx.ids.memories, id, ctx.memories),
+    ),
+  )
+}
+
+fn new_table(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    tables: ctx.tables + 1,
+    ids: IdContext(..ctx.ids, tables: assign_id(ctx.ids.tables, id, ctx.tables)),
+  )
+}
+
+fn new_function(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    functions: ctx.functions + 1,
+    ids: IdContext(
+      ..ctx.ids,
+      functions: assign_id(ctx.ids.functions, id, ctx.functions),
+    ),
+  )
+}
+
+fn new_data(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    datas: ctx.datas + 1,
+    ids: IdContext(..ctx.ids, datas: assign_id(ctx.ids.datas, id, ctx.datas)),
+  )
+}
+
+fn new_element(ctx: ParseContext, id: Option(String)) -> ParseContext {
+  ParseContext(
+    ..ctx,
+    elements: ctx.elements + 1,
+    ids: IdContext(
+      ..ctx.ids,
+      elements: assign_id(ctx.ids.elements, id, ctx.elements),
+    ),
+  )
+}
+
+fn non_import(ctx: ParseContext) -> ParseContext {
+  ParseContext(..ctx, non_import_defs: True)
+}
+
+fn assign_id(
+  ids: Dict(String, Int),
+  id: Option(String),
+  idx: Int,
+) -> Dict(String, Int) {
+  case id {
+    Some(id) -> dict.insert(ids, id, idx)
+    None -> ids
+  }
+}
+
+fn tag_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("tag")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
@@ -757,36 +900,27 @@ fn tag_parser(
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, tags: ctx.tags + 1), [
-          ImportDecl(ImportTag(
-            module_name:,
-            import_name:,
-            id:,
-            type_:,
-            params:,
-            results:,
-          )),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        ImportDecl(ImportTag(
+          module_name:,
+          import_name:,
+          id:,
+          type_:,
+          params:,
+          results:,
+        )),
+        ..exports
+      ])
     },
     {
       use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, tags: ctx.tags + 1, non_import_defs: True), [
-          TagDecl(Tag(id:, type_:, params:, results:)),
-          ..exports
-        ]),
-      )
+      nibble.return([TagDecl(Tag(id:, type_:, params:, results:)), ..exports])
     },
   ])
 }
 
-fn export_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn export_parser() -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("export")))
   use export_name <- nibble.do(string_parser())
   use export <- nibble.do(nibble.one_of(
@@ -806,12 +940,10 @@ fn export_parser(
     }),
   ))
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(#(ctx, [ExportDecl(export)]))
+  nibble.return([ExportDecl(export)])
 }
 
-fn import_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn import_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("import")))
   use _ <- nibble.do(nibble.guard(
     !ctx.non_import_defs,
@@ -892,34 +1024,20 @@ fn import_parser(
     ]),
   )
   use _ <- nibble.do(nibble.token(RParen))
-  let ctx = case import_ {
-    ImportTag(..) -> ParseContext(..ctx, tags: ctx.tags + 1)
-    ImportGlobal(..) -> ParseContext(..ctx, globals: ctx.globals + 1)
-    ImportMemory(..) -> ParseContext(..ctx, memories: ctx.memories + 1)
-    ImportTable(..) -> ParseContext(..ctx, tables: ctx.tables + 1)
-    ImportFunction(..) -> ParseContext(..ctx, functions: ctx.functions + 1)
-  }
-  nibble.return(#(ctx, [ImportDecl(import_)]))
+  nibble.return([ImportDecl(import_)])
 }
 
-fn start_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn start_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("start")))
   use function_index <- nibble.do(index_parser())
   use _ <- nibble.do(nibble.token(RParen))
   case ctx.start {
     True -> nibble.fail("at most one start function may occur in a module")
-    False ->
-      nibble.return(
-        #(ParseContext(..ctx, start: True), [StartDecl(Start(function_index:))]),
-      )
+    False -> nibble.return([StartDecl(Start(function_index:))])
   }
 }
 
-fn element_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn element_parser() -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("elem")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   nibble.one_of([
@@ -928,21 +1046,17 @@ fn element_parser(
       use _ <- nibble.do(nibble.token(Keyword("declare")))
       use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, elements: ctx.elements + 1), [
-          ElementDecl(DeclarativeElement(id:, ref_type:, elems:)),
-        ]),
-      )
+      nibble.return([
+        ElementDecl(DeclarativeElement(id:, ref_type:, elems:)),
+      ])
     },
     {
       // passive element
       use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, elements: ctx.elements + 1), [
-          ElementDecl(PassiveElement(id:, ref_type:, elems:)),
-        ]),
-      )
+      nibble.return([
+        ElementDecl(PassiveElement(id:, ref_type:, elems:)),
+      ])
     },
     {
       // active element
@@ -955,17 +1069,9 @@ fn element_parser(
       use _ <- nibble.do(nibble.token(RParen))
       // abbreviation: 𝜖 -> (table 0)
       let table_index = option.unwrap(table_index, IndexInt("0"))
-      nibble.return(
-        #(ParseContext(..ctx, elements: ctx.elements + 1), [
-          ElementDecl(ActiveElement(
-            id:,
-            ref_type:,
-            elems:,
-            table_index:,
-            offset:,
-          )),
-        ]),
-      )
+      nibble.return([
+        ElementDecl(ActiveElement(id:, ref_type:, elems:, table_index:, offset:)),
+      ])
     },
   ])
 }
@@ -979,9 +1085,7 @@ fn inline_exports_parser(new_index: Int, constr) {
   )
 }
 
-fn table_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("table")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
@@ -991,19 +1095,17 @@ fn table_parser(
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, tables: ctx.tables + 1), [
-          ImportDecl(ImportTable(
-            module_name:,
-            import_name:,
-            id:,
-            address_type:,
-            limits:,
-            ref_type:,
-          )),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        ImportDecl(ImportTable(
+          module_name:,
+          import_name:,
+          id:,
+          address_type:,
+          limits:,
+          ref_type:,
+        )),
+        ..exports
+      ])
     },
     {
       use address_type <- nibble.do(address_type_parser())
@@ -1028,27 +1130,17 @@ fn table_parser(
           ]
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return(
-            #(
-              ParseContext(
-                ..ctx,
-                tables: ctx.tables + 1,
-                elements: ctx.elements + 1,
-                non_import_defs: True,
-              ),
-              [
-                TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
-                ElementDecl(ActiveElement(
-                  id: None,
-                  ref_type: elem_ref_type,
-                  elems:,
-                  table_index: IndexInt(int.to_string(ctx.tables)),
-                  offset:,
-                )),
-                ..exports
-              ],
-            ),
-          )
+          nibble.return([
+            TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
+            ElementDecl(ActiveElement(
+              id: None,
+              ref_type: elem_ref_type,
+              elems:,
+              table_index: IndexInt(int.to_string(ctx.tables)),
+              offset:,
+            )),
+            ..exports
+          ])
         },
         {
           // plain table case
@@ -1064,15 +1156,10 @@ fn table_parser(
             _, _ -> nibble.return(expr)
           })
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return(
-            #(
-              ParseContext(..ctx, tables: ctx.tables + 1, non_import_defs: True),
-              [
-                TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
-                ..exports
-              ],
-            ),
-          )
+          nibble.return([
+            TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
+            ..exports
+          ])
         },
       ])
     },
@@ -1135,7 +1222,7 @@ fn expr_parser() -> nibble.Parser(List(Instruction), Token, b) {
   nibble.many(instr_parser()) |> nibble.map(list.flatten)
 }
 
-fn data_parser(ctx: ParseContext) {
+fn data_parser() {
   use _ <- nibble.do(nibble.token(LKeyword("data")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   nibble.one_of([
@@ -1143,11 +1230,9 @@ fn data_parser(ctx: ParseContext) {
       // passive data
       use data <- nibble.do(string_bytes_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, datas: ctx.datas + 1), [
-          DataDecl(PassiveData(id:, data:)),
-        ]),
-      )
+      nibble.return([
+        DataDecl(PassiveData(id:, data:)),
+      ])
     },
     {
       // active data
@@ -1159,11 +1244,9 @@ fn data_parser(ctx: ParseContext) {
       use offset <- nibble.do(offset_parser())
       use data <- nibble.do(string_bytes_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, datas: ctx.datas + 1), [
-          DataDecl(ActiveData(id:, data:, memory_index:, offset:)),
-        ]),
-      )
+      nibble.return([
+        DataDecl(ActiveData(id:, data:, memory_index:, offset:)),
+      ])
     },
   ])
 }
@@ -1199,18 +1282,16 @@ fn memory_parser(ctx: ParseContext) {
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits) <- nibble.do(memory_type_parser())
-      nibble.return(
-        #(ParseContext(..ctx, memories: ctx.memories + 1), [
-          ImportDecl(ImportMemory(
-            module_name:,
-            import_name:,
-            id:,
-            address_type:,
-            limits:,
-          )),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        ImportDecl(ImportMemory(
+          module_name:,
+          import_name:,
+          id:,
+          address_type:,
+          limits:,
+        )),
+        ..exports
+      ])
     },
     {
       use address_type <- nibble.do(address_type_parser())
@@ -1225,51 +1306,28 @@ fn memory_parser(ctx: ParseContext) {
             |> int.to_string
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return(
-            #(
-              ParseContext(
-                ..ctx,
-                memories: ctx.memories + 1,
-                datas: ctx.datas + 1,
-                non_import_defs: True,
+          nibble.return([
+            MemoryDecl(Memory(id:, address_type:, limits: Limits(n, Some(n)))),
+            DataDecl(
+              ActiveData(
+                id: None,
+                data:,
+                memory_index: IndexInt(ctx.memories |> int.to_string),
+                offset: [
+                  I32Const("0"),
+                ],
               ),
-              [
-                MemoryDecl(Memory(
-                  id:,
-                  address_type:,
-                  limits: Limits(n, Some(n)),
-                )),
-                DataDecl(
-                  ActiveData(
-                    id: None,
-                    data:,
-                    memory_index: IndexInt(ctx.memories |> int.to_string),
-                    offset: [
-                      I32Const("0"),
-                    ],
-                  ),
-                ),
-                ..exports
-              ],
             ),
-          )
+            ..exports
+          ])
         },
         {
           // plain memory case
           use limits <- nibble.do(limits_parser())
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return(
-            #(
-              ParseContext(
-                ..ctx,
-                memories: ctx.memories + 1,
-                non_import_defs: True,
-              ),
-              [
-                MemoryDecl(Memory(id:, address_type:, limits:)),
-              ],
-            ),
-          )
+          nibble.return([
+            MemoryDecl(Memory(id:, address_type:, limits:)),
+          ])
         },
       ])
     },
@@ -1347,9 +1405,7 @@ fn address_type_parser() -> nibble.Parser(AddressType, Token, b) {
   )
 }
 
-fn global_parser(
-  ctx: ParseContext,
-) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
+fn global_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("global")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.globals, ExportGlobal))
@@ -1358,29 +1414,25 @@ fn global_parser(
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(mutability, value_type) <- nibble.do(global_type_parser())
-      nibble.return(
-        #(ParseContext(..ctx, globals: ctx.globals + 1), [
-          ImportDecl(ImportGlobal(
-            module_name:,
-            import_name:,
-            id:,
-            mutability:,
-            value_type:,
-          )),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        ImportDecl(ImportGlobal(
+          module_name:,
+          import_name:,
+          id:,
+          mutability:,
+          value_type:,
+        )),
+        ..exports
+      ])
     },
     {
       use #(mutability, value_type) <- nibble.do(global_type_parser())
       use expr <- nibble.do(expr_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, globals: ctx.globals + 1, non_import_defs: True), [
-          GlobalDecl(Global(id:, mutability:, value_type:, expr:)),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        GlobalDecl(Global(id:, mutability:, value_type:, expr:)),
+        ..exports
+      ])
     },
   ])
 }
@@ -1410,7 +1462,7 @@ pub fn rec_type_parser() {
     },
     type_def_parser() |> nibble.map(fn(t) { [t] }),
   ])
-  |> nibble.map(RecType)
+  |> nibble.map(fn(t) { [TypeDecl(RecType(t))] })
 }
 
 fn type_def_parser() -> nibble.Parser(TypeDef, Token, b) {
@@ -1523,19 +1575,17 @@ fn func_parser(ctx: ParseContext) {
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(ParseContext(..ctx, functions: ctx.functions + 1), [
-          ImportDecl(ImportFunction(
-            module_name:,
-            import_name:,
-            id:,
-            type_:,
-            params:,
-            results:,
-          )),
-          ..exports
-        ]),
-      )
+      nibble.return([
+        ImportDecl(ImportFunction(
+          module_name:,
+          import_name:,
+          id:,
+          type_:,
+          params:,
+          results:,
+        )),
+        ..exports
+      ])
     },
     {
       // inline function
@@ -1545,26 +1595,10 @@ fn func_parser(ctx: ParseContext) {
       )
       use expr <- nibble.do(expr_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(
-        #(
-          ParseContext(
-            ..ctx,
-            functions: ctx.functions + 1,
-            non_import_defs: True,
-          ),
-          [
-            FunctionDecl(Function(
-              id:,
-              type_:,
-              params:,
-              results:,
-              locals:,
-              expr:,
-            )),
-            ..exports
-          ],
-        ),
-      )
+      nibble.return([
+        FunctionDecl(Function(id:, type_:, params:, results:, locals:, expr:)),
+        ..exports
+      ])
     },
   ])
 }
@@ -2156,4 +2190,669 @@ fn keyword_value_parser(
 ) -> nibble.Parser(v, Token, a) {
   use _ <- nibble.do(nibble.token(Keyword(keyword)))
   nibble.return(value)
+}
+
+pub fn resolve_indices(mod: Module, ctx: IdContext) -> Result(Module, String) {
+  use types <- result.try(
+    list.try_map(mod.types, fn(rec) {
+      use defs <- result.map(list.try_map(rec.defs, resolve_ids_type(_, ctx)))
+      RecType(defs)
+    }),
+  )
+  use imports <- result.try(
+    list.try_map(mod.imports, resolve_ids_import(_, ctx)),
+  )
+  use tags <- result.try(list.try_map(mod.tags, resolve_ids_tag(_, ctx)))
+  use globals <- result.try(
+    list.try_map(mod.globals, resolve_ids_global(_, ctx)),
+  )
+  use tables <- result.try(list.try_map(mod.tables, resolve_ids_table(_, ctx)))
+  use functions <- result.try(
+    list.try_map(mod.functions, resolve_ids_function(_, ctx)),
+  )
+  use datas <- result.try(list.try_map(mod.datas, resolve_ids_data(_, ctx)))
+  use elements <- result.try(
+    list.try_map(mod.elements, resolve_ids_element(_, ctx)),
+  )
+  use start <- result.try(resolve_ids_start(mod.start, ctx))
+  use exports <- result.map(
+    list.try_map(mod.exports, resolve_ids_export(_, ctx)),
+  )
+  Module(
+    ..mod,
+    types:,
+    imports:,
+    tags:,
+    globals:,
+    tables:,
+    functions:,
+    datas:,
+    elements:,
+    start:,
+    exports:,
+  )
+}
+
+fn resolve_ids_type(t: TypeDef, ctx: IdContext) -> Result(TypeDef, String) {
+  use super <- result.try(list.try_map(t.super, resolve_type(_, ctx)))
+  use def <- result.map(resolve_ids_comp_type(t.def, ctx))
+  TypeDef(..t, super:, def:)
+}
+
+fn resolve_ids_comp_type(
+  def: CompType,
+  ctx: IdContext,
+) -> Result(CompType, String) {
+  case def {
+    Struct(fields:) -> {
+      use fields <- result.map(list.try_map(fields, resolve_ids_field(_, ctx)))
+      Struct(fields:)
+    }
+    Array(item_type:) -> {
+      use item_type <- result.map(resolve_ids_field_type(item_type, ctx))
+      Array(item_type:)
+    }
+    Func(params:, results:) -> {
+      let tu = TypeUse(None, params, results)
+      use TypeUse(_, params:, results:) <- result.map(resolve_ids_type_use(
+        tu,
+        ctx,
+      ))
+      Func(params:, results:)
+    }
+  }
+}
+
+fn resolve_ids_import(value: Import, ctx: IdContext) -> Result(Import, String) {
+  case value {
+    ImportTag(type_:, params:, results:, ..) -> {
+      use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
+        TypeUse(type_:, params:, results:),
+        ctx,
+      ))
+      ImportTag(..value, type_:, params:, results:)
+    }
+    ImportGlobal(value_type:, ..) -> {
+      use value_type <- result.map(resolve_ids_value_type(value_type, ctx))
+      ImportGlobal(..value, value_type:)
+    }
+    ImportMemory(..) -> Ok(value)
+    ImportTable(ref_type:, ..) -> {
+      use ref_type <- result.map(resolve_ids_ref_type(ref_type, ctx))
+      ImportTable(..value, ref_type:)
+    }
+    ImportFunction(type_:, params:, results:, ..) -> {
+      use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
+        TypeUse(type_:, params:, results:),
+        ctx,
+      ))
+      ImportFunction(..value, type_:, params:, results:)
+    }
+  }
+}
+
+fn resolve_ids_tag(tag: Tag, ctx: IdContext) -> Result(Tag, String) {
+  let Tag(type_:, params:, results:, ..) = tag
+  use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
+    TypeUse(type_:, params:, results:),
+    ctx,
+  ))
+  Tag(..tag, type_:, params:, results:)
+}
+
+fn resolve_ids_global(
+  global: Global,
+  ctx: IdContext,
+) -> Result(Global, String) {
+  use value_type <- result.try(resolve_ids_value_type(global.value_type, ctx))
+  use expr <- result.map(list.try_map(global.expr, resolve_ids_instr(_, ctx)))
+  Global(..global, value_type:, expr:)
+}
+
+fn resolve_ids_table(table: Table, ctx: IdContext) -> Result(Table, String) {
+  use ref_type <- result.try(resolve_ids_ref_type(table.ref_type, ctx))
+  use expr <- result.map(list.try_map(table.expr, resolve_ids_instr(_, ctx)))
+  Table(..table, ref_type:, expr:)
+}
+
+fn resolve_ids_function(
+  function: Function,
+  ctx: IdContext,
+) -> Result(Function, String) {
+  let Function(type_:, params:, results:, locals:, expr:, ..) = function
+  use TypeUse(type_:, params:, results:) <- result.try(resolve_ids_type_use(
+    TypeUse(type_:, params:, results:),
+    ctx,
+  ))
+  use locals <- result.try(list.try_map(locals, resolve_ids_param(_, ctx)))
+  // TODO: extend the ID context with params/locals
+  use expr <- result.map(resolve_ids_expr(expr, ctx))
+  Function(..function, type_:, params:, results:, locals:, expr:)
+}
+
+fn resolve_ids_data(data: Data, ctx: IdContext) -> Result(Data, String) {
+  case data {
+    PassiveData(..) -> Ok(data)
+    ActiveData(memory_index:, offset:, ..) -> {
+      use memory_index <- result.try(resolve_memory(memory_index, ctx))
+      use offset <- result.map(resolve_ids_expr(offset, ctx))
+      ActiveData(..data, memory_index:, offset:)
+    }
+  }
+}
+
+fn resolve_ids_element(
+  element: Element,
+  ctx: IdContext,
+) -> Result(Element, String) {
+  use ref_type <- result.try(resolve_ids_ref_type(element.ref_type, ctx))
+  use elems <- result.try(list.try_map(element.elems, resolve_ids_expr(_, ctx)))
+  case element {
+    PassiveElement(..) -> Ok(PassiveElement(..element, ref_type:, elems:))
+    ActiveElement(table_index:, offset:, ..) -> {
+      use table_index <- result.try(resolve_table(table_index, ctx))
+      use offset <- result.map(resolve_ids_expr(offset, ctx))
+      ActiveElement(..element, ref_type:, elems:, table_index:, offset:)
+    }
+    DeclarativeElement(..) ->
+      Ok(DeclarativeElement(..element, ref_type:, elems:))
+  }
+}
+
+fn resolve_ids_start(
+  start: Option(Start),
+  ctx: IdContext,
+) -> Result(Option(Start), String) {
+  case start {
+    Some(Start(function_index:)) -> {
+      use function_index <- result.map(resolve_function(function_index, ctx))
+      Some(Start(function_index:))
+    }
+    None -> Ok(None)
+  }
+}
+
+fn resolve_ids_export(
+  export: Export,
+  ctx: IdContext,
+) -> Result(Export, String) {
+  case export {
+    ExportTag(name:, tag_index:) -> {
+      use tag_index <- result.map(resolve_tag(tag_index, ctx))
+      ExportTag(name:, tag_index:)
+    }
+    ExportGlobal(name:, global_index:) -> {
+      use global_index <- result.map(resolve_global(global_index, ctx))
+      ExportGlobal(name:, global_index:)
+    }
+    ExportMemory(name:, memory_index:) -> {
+      use memory_index <- result.map(resolve_memory(memory_index, ctx))
+      ExportMemory(name:, memory_index:)
+    }
+    ExportTable(name:, table_index:) -> {
+      use table_index <- result.map(resolve_table(table_index, ctx))
+      ExportTable(name:, table_index:)
+    }
+    ExportFunction(name:, function_index:) -> {
+      use function_index <- result.map(resolve_function(function_index, ctx))
+      ExportFunction(name:, function_index:)
+    }
+  }
+}
+
+fn resolve_ids_type_use(
+  tu: TypeUse,
+  ctx: IdContext,
+) -> Result(TypeUse, String) {
+  use type_ <- result.try(resolve_id_optional(tu.type_, ctx.types, "type"))
+  use params <- result.try(list.try_map(tu.params, resolve_ids_param(_, ctx)))
+  use results <- result.map(
+    list.try_map(tu.results, resolve_ids_value_type(_, ctx)),
+  )
+  TypeUse(type_:, params:, results:)
+}
+
+fn resolve_ids_param(param: Param, ctx: IdContext) -> Result(Param, String) {
+  use typ <- result.map(resolve_ids_value_type(param.typ, ctx))
+  Param(..param, typ:)
+}
+
+fn resolve_ids_ref_type(
+  ref_type: RefType,
+  ctx: IdContext,
+) -> Result(RefType, String) {
+  use heap_type <- result.map(resolve_ids_heap_type(ref_type.heap_type, ctx))
+  case ref_type {
+    NonNull(..) -> NonNull(heap_type:)
+    Nullable(..) -> Nullable(heap_type:)
+  }
+}
+
+fn resolve_ids_heap_type(
+  heap_type: HeapType,
+  ctx: IdContext,
+) -> Result(HeapType, String) {
+  case heap_type {
+    HeapIndex(type_index) ->
+      result.map(resolve_type(type_index, ctx), HeapIndex)
+    _ -> Ok(heap_type)
+  }
+}
+
+fn resolve_ids_value_type(
+  value_type: ValueType,
+  ctx: IdContext,
+) -> Result(ValueType, String) {
+  case value_type {
+    Ref(ref_type) -> result.map(resolve_ids_ref_type(ref_type, ctx), Ref)
+    _ -> Ok(value_type)
+  }
+}
+
+fn resolve_ids_field(field: Field, ctx: IdContext) -> Result(Field, String) {
+  result.map(resolve_ids_field_type(field.field_type, ctx), Field(field.id, _))
+}
+
+fn resolve_ids_field_type(
+  field_type: FieldType,
+  ctx: IdContext,
+) -> Result(FieldType, String) {
+  case field_type {
+    ValueField(mutability:, value_type:) ->
+      result.map(resolve_ids_value_type(value_type, ctx), ValueField(
+        mutability,
+        _,
+      ))
+    PackedField(..) -> Ok(field_type)
+  }
+}
+
+fn resolve_ids_expr(expr: List(Instruction), ctx: IdContext) {
+  list.try_map(expr, resolve_ids_instr(_, ctx))
+}
+
+fn resolve_ids_instr(
+  instr: Instruction,
+  ctx: IdContext,
+) -> Result(Instruction, String) {
+  // TODO: resolve branch labels (?)
+  case instr {
+    Unreachable | Nop -> Ok(instr)
+    Block(label:, block_type:) ->
+      result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
+    Loop(label:, block_type:) ->
+      result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
+    If(label:, block_type:) ->
+      result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
+    Else(..) | End(..) -> Ok(instr)
+    Branch(label_index: _) -> todo
+    BranchIf(label_index: _) -> todo
+    BranchTable(label_indices: _, default_label_index: _) -> todo
+    Return -> Ok(instr)
+    Call(function_index:) ->
+      result.map(resolve_function(function_index, ctx), Call)
+    CallIndirect(table_index:, type_:, params:, results:) -> {
+      use table_index <- result.try(resolve_table(table_index, ctx))
+      use type_ <- result.try(resolve_id_optional(type_, ctx.types, "type"))
+      use params <- result.try(
+        list.try_map(params, resolve_ids_value_type(_, ctx)),
+      )
+      use results <- result.map(
+        list.try_map(results, resolve_ids_value_type(_, ctx)),
+      )
+      CallIndirect(table_index:, type_:, params:, results:)
+    }
+    ReturnCall(function_index:) ->
+      result.map(resolve_function(function_index, ctx), ReturnCall)
+    ReturnCallIndirect(table_index:, type_:, params:, results:) -> {
+      use table_index <- result.try(resolve_table(table_index, ctx))
+      use type_ <- result.try(resolve_id_optional(type_, ctx.types, "type"))
+      use params <- result.try(
+        list.try_map(params, resolve_ids_value_type(_, ctx)),
+      )
+      use results <- result.map(
+        list.try_map(results, resolve_ids_value_type(_, ctx)),
+      )
+      ReturnCallIndirect(table_index:, type_:, params:, results:)
+    }
+    CallRef(type_index:) -> result.map(resolve_type(type_index, ctx), CallRef)
+    ReturnCallRef(type_index:) ->
+      result.map(resolve_type(type_index, ctx), ReturnCallRef)
+    BranchOnNull(label_index: _) -> todo
+    BranchOnNonNull(label_index: _) -> todo
+    BranchOnCast(label_index: _, from_ref_type: _, to_ref_type: _) -> todo
+    BranchOnCastFail(label_index: _, from_ref_type: _, to_ref_type: _) -> todo
+    RefNull(heap_type:) ->
+      result.map(resolve_ids_heap_type(heap_type, ctx), RefNull)
+    RefFunc(function_index:) ->
+      result.map(resolve_function(function_index, ctx), RefFunc)
+    RefIsNull | RefAsNonNull | RefEq -> Ok(instr)
+    RefTest(ref_type:) ->
+      result.map(resolve_ids_ref_type(ref_type, ctx), RefTest)
+    RefCast(ref_type:) ->
+      result.map(resolve_ids_ref_type(ref_type, ctx), RefCast)
+    RefI31 | I31GetS | I31GetU -> Ok(instr)
+    StructNew(type_index:) ->
+      result.map(resolve_type(type_index, ctx), StructNew)
+    StructNewDefault(type_index:) ->
+      result.map(resolve_type(type_index, ctx), StructNewDefault)
+    StructGet(type_index:, field_index:) -> todo
+    StructGetS(type_index:, field_index:) -> todo
+    StructGetU(type_index:, field_index:) -> todo
+    StructSet(type_index:, field_index:) -> todo
+    ArrayNew(type_index:) -> result.map(resolve_type(type_index, ctx), ArrayNew)
+    ArrayNewDefault(type_index:) ->
+      result.map(resolve_type(type_index, ctx), ArrayNewDefault)
+    ArrayNewFixed(type_index:, size:) ->
+      result.map(resolve_type(type_index, ctx), ArrayNewFixed(_, size))
+    ArrayNewData(type_index:, data_index:) -> {
+      use type_index <- result.try(resolve_type(type_index, ctx))
+      use data_index <- result.map(resolve_data(data_index, ctx))
+      ArrayNewData(type_index, data_index)
+    }
+    ArrayNewElem(type_index:, element_index:) -> {
+      use type_index <- result.try(resolve_type(type_index, ctx))
+      use element_index <- result.map(resolve_element(element_index, ctx))
+      ArrayNewElem(type_index, element_index)
+    }
+    ArrayGet(type_index:) -> result.map(resolve_type(type_index, ctx), ArrayGet)
+    ArrayGetS(type_index:) ->
+      result.map(resolve_type(type_index, ctx), ArrayGetS)
+    ArrayGetU(type_index:) ->
+      result.map(resolve_type(type_index, ctx), ArrayGetU)
+    ArraySet(type_index:) -> result.map(resolve_type(type_index, ctx), ArraySet)
+    ArrayLen -> Ok(instr)
+    ArrayFill(type_index:) ->
+      result.map(resolve_type(type_index, ctx), ArrayFill)
+    ArrayCopy(type_index:, source_type_index:) -> {
+      use type_index <- result.try(resolve_type(type_index, ctx))
+      use source_type_index <- result.map(resolve_type(source_type_index, ctx))
+      ArrayCopy(type_index:, source_type_index:)
+    }
+    ArrayInitData(type_index:, data_index:) -> {
+      use type_index <- result.try(resolve_type(type_index, ctx))
+      use data_index <- result.map(resolve_data(data_index, ctx))
+      ArrayInitData(type_index, data_index)
+    }
+    ArrayInitElem(type_index:, element_index:) -> {
+      use type_index <- result.try(resolve_type(type_index, ctx))
+      use element_index <- result.map(resolve_element(element_index, ctx))
+      ArrayInitElem(type_index, element_index)
+    }
+    AnyConvertExtern | ExternConvertAny | Drop | Select(_) -> Ok(instr)
+    LocalGet(local_index:) -> todo
+    LocalSet(local_index:) -> todo
+    LocalTee(local_index:) -> todo
+    GlobalGet(global_index:) ->
+      result.map(resolve_global(global_index, ctx), GlobalGet)
+    GlobalSet(global_index:) ->
+      result.map(resolve_global(global_index, ctx), GlobalSet)
+    TableGet(table_index:) ->
+      result.map(resolve_table(table_index, ctx), TableGet)
+    TableSet(table_index:) ->
+      result.map(resolve_table(table_index, ctx), TableSet)
+    TableSize(table_index:) ->
+      result.map(resolve_table(table_index, ctx), TableSize)
+    TableGrow(table_index:) ->
+      result.map(resolve_table(table_index, ctx), TableGrow)
+    TableFill(table_index:) ->
+      result.map(resolve_table(table_index, ctx), TableFill)
+    TableCopy(table_index:, source_table_index:) -> {
+      use table_index <- result.try(resolve_table(table_index, ctx))
+      use source_table_index <- result.map(resolve_table(
+        source_table_index,
+        ctx,
+      ))
+      TableCopy(table_index:, source_table_index:)
+    }
+    TableInit(table_index:, element_index:) -> {
+      use table_index <- result.try(resolve_table(table_index, ctx))
+      use element_index <- result.map(resolve_element(element_index, ctx))
+      TableInit(table_index, element_index)
+    }
+    ElemDrop(element_index:) ->
+      result.map(resolve_element(element_index, ctx), ElemDrop)
+    I32Load(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Load(_, offset, align))
+    I64Load(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load(_, offset, align))
+    F32Load(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), F32Load(_, offset, align))
+    F64Load(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), F64Load(_, offset, align))
+    I32Load8S(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Load8S(_, offset, align))
+    I32Load8U(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Load8U(_, offset, align))
+    I32Load16S(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Load16S(_, offset, align))
+    I32Load16U(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Load16U(_, offset, align))
+    I64Load8S(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load8S(_, offset, align))
+    I64Load8U(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load8U(_, offset, align))
+    I64Load16S(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load16S(_, offset, align))
+    I64Load16U(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load16U(_, offset, align))
+    I64Load32S(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load32S(_, offset, align))
+    I64Load32U(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Load32U(_, offset, align))
+    I32Store(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Store(_, offset, align))
+    I64Store(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Store(_, offset, align))
+    F32Store(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), F32Store(_, offset, align))
+    F64Store(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), F64Store(_, offset, align))
+    I32Store8(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Store8(_, offset, align))
+    I32Store16(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I32Store16(_, offset, align))
+    I64Store8(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Store8(_, offset, align))
+    I64Store16(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Store16(_, offset, align))
+    I64Store32(memory_index:, offset:, align:) ->
+      result.map(resolve_memory(memory_index, ctx), I64Store32(_, offset, align))
+    MemorySize(memory_index:) ->
+      result.map(resolve_memory(memory_index, ctx), MemorySize)
+    MemoryGrow(memory_index:) ->
+      result.map(resolve_memory(memory_index, ctx), MemoryGrow)
+    MemoryFill(memory_index:) ->
+      result.map(resolve_memory(memory_index, ctx), MemoryFill)
+    MemoryCopy(memory_index:) ->
+      result.map(resolve_memory(memory_index, ctx), MemoryCopy)
+    MemoryInit(memory_index:, data_index:) -> {
+      use memory_index <- result.try(resolve_memory(memory_index, ctx))
+      use data_index <- result.map(resolve_data(data_index, ctx))
+      MemoryInit(memory_index:, data_index:)
+    }
+    DataDrop(data_index:) -> result.map(resolve_data(data_index, ctx), DataDrop)
+    I32Const(..) | I64Const(..) | F32Const(..) | F64Const(..) -> Ok(instr)
+    I32EqZ
+    | I32Eq
+    | I32NE
+    | I32LtS
+    | I32LtU
+    | I32GtS
+    | I32GtU
+    | I32LeS
+    | I32LeU
+    | I32GeS
+    | I32GeU -> Ok(instr)
+    I64EqZ
+    | I64Eq
+    | I64NE
+    | I64LtS
+    | I64LtU
+    | I64GtS
+    | I64GtU
+    | I64LeS
+    | I64LeU
+    | I64GeS
+    | I64GeU -> Ok(instr)
+    F32Eq | F32NE | F32Lt | F32Gt | F32Le | F32Ge -> Ok(instr)
+    F64Eq | F64NE | F64Lt | F64Gt | F64Le | F64Ge -> Ok(instr)
+    I32CntLZ
+    | I32CntTZ
+    | I32PopCnt
+    | I32Extend8S
+    | I32Extend16S
+    | I32Add
+    | I32Sub
+    | I32Mul
+    | I32DivS
+    | I32DivU
+    | I32RemS
+    | I32RemU
+    | I32And
+    | I32Or
+    | I32Xor
+    | I32ShL
+    | I32ShRS
+    | I32ShRU
+    | I32RotL
+    | I32RotR -> Ok(instr)
+    I64CntLZ
+    | I64CntTZ
+    | I64PopCnt
+    | I64Extend8S
+    | I64Extend16S
+    | I64Extend32S
+    | I64Add
+    | I64Sub
+    | I64Mul
+    | I64DivS
+    | I64DivU
+    | I64RemS
+    | I64RemU
+    | I64And
+    | I64Or
+    | I64Xor
+    | I64ShL
+    | I64ShRS
+    | I64ShRU
+    | I64RotL
+    | I64RotR -> Ok(instr)
+    F32Abs
+    | F32Neg
+    | F32Ceil
+    | F32Floor
+    | F32Trunc
+    | F32Nearest
+    | F32Sqrt
+    | F32Add
+    | F32Sub
+    | F32Mul
+    | F32Div
+    | F32Min
+    | F32Max
+    | F32CopySign -> Ok(instr)
+    F64Abs
+    | F64Neg
+    | F64Ceil
+    | F64Floor
+    | F64Trunc
+    | F64Nearest
+    | F64Sqrt
+    | F64Add
+    | F64Sub
+    | F64Mul
+    | F64Div
+    | F64Min
+    | F64Max
+    | F64CopySign -> Ok(instr)
+  }
+}
+
+fn resolve_ids_block_type(
+  block_type: BlockType,
+  ctx: IdContext,
+) -> Result(BlockType, String) {
+  case block_type {
+    BlockTypeUse(type_:, params:, results:) -> {
+      use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
+        TypeUse(type_:, params:, results:),
+        ctx,
+      ))
+      BlockTypeUse(type_:, params:, results:)
+    }
+    BlockResult(value_type) ->
+      result.map(resolve_ids_value_type(value_type, ctx), BlockResult)
+    BlockEmpty -> Ok(BlockEmpty)
+  }
+}
+
+fn resolve_type(type_index: Index, ctx: IdContext) -> Result(Index, String) {
+  resolve_id(type_index, ctx.types, "type")
+}
+
+fn resolve_tag(tag_index: Index, ctx: IdContext) -> Result(Index, String) {
+  resolve_id(tag_index, ctx.tags, "tag")
+}
+
+fn resolve_global(
+  global_index: Index,
+  ctx: IdContext,
+) -> Result(Index, String) {
+  resolve_id(global_index, ctx.globals, "global")
+}
+
+fn resolve_memory(
+  memory_index: Index,
+  ctx: IdContext,
+) -> Result(Index, String) {
+  resolve_id(memory_index, ctx.memories, "memory")
+}
+
+fn resolve_table(table_index: Index, ctx: IdContext) -> Result(Index, String) {
+  resolve_id(table_index, ctx.tables, "table")
+}
+
+fn resolve_function(
+  function_index: Index,
+  ctx: IdContext,
+) -> Result(Index, String) {
+  resolve_id(function_index, ctx.functions, "function")
+}
+
+fn resolve_data(data_index: Index, ctx: IdContext) -> Result(Index, String) {
+  resolve_id(data_index, ctx.datas, "data")
+}
+
+fn resolve_element(
+  element_index: Index,
+  ctx: IdContext,
+) -> Result(Index, String) {
+  resolve_id(element_index, ctx.elements, "element")
+}
+
+fn resolve_id_optional(
+  index: Option(Index),
+  ids: Dict(String, Int),
+  where: String,
+) -> Result(Option(Index), String) {
+  case index {
+    Some(index) -> result.map(resolve_id(index, ids, where), Some)
+    None -> Ok(None)
+  }
+}
+
+fn resolve_id(
+  index: Index,
+  ids: Dict(String, Int),
+  where: String,
+) -> Result(Index, String) {
+  case index {
+    IndexInt(_) -> Ok(index)
+    IndexId(id) ->
+      case dict.get(ids, id) {
+        Ok(index) -> Ok(IndexInt(int.to_string(index)))
+        Error(_) -> Error(where <> " id not found: " <> id)
+      }
+  }
 }

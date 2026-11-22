@@ -30,10 +30,10 @@ The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-
 - [ ] Lexical format
   - [x] Keyword tokens
   - [x] Integer tokens
-  - [ ] Float tokens
+  - [x] Float tokens
   - [x] String tokens
   - [x] Regular ID tokens
-  - [ ] String ID tokens
+  - [x] String ID tokens
   - [ ] White space
   - [x] Inline comments
   - [ ] Block comments
@@ -75,7 +75,7 @@ The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-
   - [x] Expressions
 - [ ] Modules
   - [ ] Indices (missing: some checks?)
-  - [x] Types
+  - [ ] Types (missing: implicitly created types)
   - [x] Tags
   - [x] Globals
   - [x] Memories
