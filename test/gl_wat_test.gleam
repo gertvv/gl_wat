@@ -685,6 +685,23 @@ pub fn resolve_func_ids_test() {
     ],
     ..,
   )) = parse_and_resolve_module("(func $f (call $g)) (func $g (call $f))")
+  let assert Error("function not found: $g") =
+    parse_and_resolve_module("(func $f (call $g))")
+}
+
+pub fn resolve_local_ids_test() {
+  let assert Ok(w.Module(
+    functions: [
+      w.Function(
+        expr: [w.LocalGet(w.IndexInt("0")), w.LocalSet(w.IndexInt("1"))],
+        ..,
+      ),
+    ],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(func $f (param $a i32) (local $b i32) (local.get $a) (local.set $b))",
+    )
 }
 
 fn assert_lex_self_as(l, input, fun) {

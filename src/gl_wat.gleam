@@ -61,7 +61,6 @@ pub fn lexer() {
   let assert Ok(name_id_re) = regexp.from_string("^[$]" <> strpat)
 
   lexer.simple([
-    // TODO: name-style IDs
     separated_token(id_re, Id),
     separated_token(name_id_re, Id),
     separated_token(int_re, Integer),
@@ -666,12 +665,13 @@ pub type IdContext {
     functions: Dict(String, Int),
     datas: Dict(String, Int),
     elements: Dict(String, Int),
+    locals: Dict(String, Int),
   )
 }
 
 fn empty_id_context() {
   let e = dict.new()
-  IdContext(e, e, e, e, e, e, e, e)
+  IdContext(e, e, e, e, e, e, e, e, e)
 }
 
 type ParseContext {
@@ -2326,7 +2326,17 @@ fn resolve_ids_function(
   ))
   use locals <- result.try(list.try_map(locals, resolve_ids_param(_, ctx)))
   // TODO: extend the ID context with params/locals
-  use expr <- result.map(resolve_ids_expr(expr, ctx))
+  let local_indices =
+    list.append(params, locals)
+    |> list.index_map(fn(param, idx) {
+      option.map(param.id, fn(id) { #(id, idx) })
+    })
+    |> option.values
+    |> dict.from_list
+  use expr <- result.map(resolve_ids_expr(
+    expr,
+    IdContext(..ctx, locals: local_indices),
+  ))
   Function(..function, type_:, params:, results:, locals:, expr:)
 }
 
@@ -2580,9 +2590,12 @@ fn resolve_ids_instr(
       ArrayInitElem(type_index, element_index)
     }
     AnyConvertExtern | ExternConvertAny | Drop | Select(_) -> Ok(instr)
-    LocalGet(local_index:) -> todo
-    LocalSet(local_index:) -> todo
-    LocalTee(local_index:) -> todo
+    LocalGet(local_index:) ->
+      result.map(resolve_local(local_index, ctx), LocalGet)
+    LocalSet(local_index:) ->
+      result.map(resolve_local(local_index, ctx), LocalSet)
+    LocalTee(local_index:) ->
+      result.map(resolve_local(local_index, ctx), LocalTee)
     GlobalGet(global_index:) ->
       result.map(resolve_global(global_index, ctx), GlobalGet)
     GlobalSet(global_index:) ->
@@ -2831,6 +2844,10 @@ fn resolve_element(
   resolve_id(element_index, ctx.elements, "element")
 }
 
+fn resolve_local(local_index: Index, ctx: IdContext) -> Result(Index, String) {
+  resolve_id(local_index, ctx.locals, "local")
+}
+
 fn resolve_id_optional(
   index: Option(Index),
   ids: Dict(String, Int),
@@ -2852,7 +2869,7 @@ fn resolve_id(
     IndexId(id) ->
       case dict.get(ids, id) {
         Ok(index) -> Ok(IndexInt(int.to_string(index)))
-        Error(_) -> Error(where <> " id not found: " <> id)
+        Error(_) -> Error(where <> " not found: " <> id)
       }
   }
 }

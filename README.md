@@ -75,6 +75,10 @@ The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-
   - [x] Expressions
 - [ ] Modules
   - [ ] Indices (missing: some checks?)
+    - [x] Resolve type, tag, global, memory, table, function, data, element indices
+    - [x] Resolve local indices
+    - [ ] Resolve label indices
+    - [ ] Resolve field indices
   - [ ] Types (missing: implicitly created types)
   - [x] Tags
   - [x] Globals
