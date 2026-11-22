@@ -1,4 +1,5 @@
 import gleam/bit_array
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
@@ -190,7 +191,7 @@ pub type Param {
 pub type Function {
   Function(
     id: Option(String),
-    type_: Option(Index),
+    type_: Index,
     params: List(Param),
     results: List(ValueType),
     locals: List(Param),
@@ -198,13 +199,8 @@ pub type Function {
   )
 }
 
-// TODO: maybe just keep BlockTypeUse?
 pub type BlockType {
-  BlockTypeUse(
-    type_: Option(Index),
-    params: List(Param),
-    results: List(ValueType),
-  )
+  BlockTypeUse(type_: Index, params: List(Param), results: List(ValueType))
   BlockResult(ValueType)
   BlockEmpty
 }
@@ -226,6 +222,10 @@ pub type CompType {
   Struct(fields: List(Field))
   Array(item_type: FieldType)
   Func(params: List(Param), results: List(ValueType))
+}
+
+pub fn func_type(params: List(Param), results: List(ValueType)) -> RecType {
+  RecType([TypeDef(None, Final, [], Func(params, results))])
 }
 
 pub type Field {
@@ -259,16 +259,14 @@ pub type Instruction {
   Call(function_index: Index)
   CallIndirect(
     table_index: Index,
-    // TODO: instead mint a type if only params + results given?
-    type_: Option(Index),
+    type_: Index,
     params: List(ValueType),
     results: List(ValueType),
   )
   ReturnCall(function_index: Index)
   ReturnCallIndirect(
     table_index: Index,
-    // TODO: instead mint a type if only params + results given?
-    type_: Option(Index),
+    type_: Index,
     params: List(ValueType),
     results: List(ValueType),
   )
@@ -487,19 +485,28 @@ pub type Instruction {
   // TODO: vector instructions
 }
 
+pub type ImplicitFunc {
+  ImplicitFunc(params: List(ValueType), results: List(ValueType))
+}
+
+fn implicit_func(params: List(Param), results: List(ValueType)) {
+  ImplicitFunc(list.map(params, fn(param) { param.typ }), results)
+}
+
 pub type Index {
   IndexInt(String)
   IndexId(String)
+  IndexImplicit(ImplicitFunc)
 }
 
 type TypeUse {
-  TypeUse(type_: Option(Index), params: List(Param), results: List(ValueType))
+  TypeUse(type_: Index, params: List(Param), results: List(ValueType))
 }
 
 pub type Tag {
   Tag(
     id: Option(String),
-    type_: Option(Index),
+    type_: Index,
     params: List(Param),
     results: List(ValueType),
   )
@@ -581,7 +588,7 @@ pub type Import {
     module_name: String,
     import_name: String,
     id: Option(String),
-    type_: Option(Index),
+    type_: Index,
     params: List(Param),
     results: List(ValueType),
   )
@@ -611,7 +618,7 @@ pub type Import {
     module_name: String,
     import_name: String,
     id: Option(String),
-    type_: Option(Index),
+    type_: Index,
     params: List(Param),
     results: List(ValueType),
   )
@@ -669,12 +676,13 @@ pub type IdContext {
     locals: Dict(String, Int),
     labels: List(String),
     fields: Dict(#(Int, String), Int),
+    func_types: Dict(ImplicitFunc, Int),
   )
 }
 
 fn empty_id_context() {
   let e = dict.new()
-  IdContext(e, e, e, e, e, e, e, e, e, [], dict.new())
+  IdContext(e, e, e, e, e, e, e, e, e, [], dict.new(), dict.new())
 }
 
 type ParseContext {
@@ -690,7 +698,24 @@ type ParseContext {
     start: Bool,
     non_import_defs: Bool,
     ids: IdContext,
+    impl: List(ImplicitFunc),
   )
+}
+
+type ParseReturn {
+  ParseReturn(impl: List(ImplicitFunc), decl: List(Decl))
+}
+
+type ExprReturn {
+  ExprReturn(impl: List(ImplicitFunc), instr: List(Instruction))
+}
+
+fn ret_one(decl: Decl) {
+  ParseReturn([], [decl])
+}
+
+fn ret_many(decl: List(Decl)) {
+  ParseReturn([], decl)
 }
 
 pub fn module_parser() {
@@ -698,15 +723,17 @@ pub fn module_parser() {
   use #(id, #(ctx, decl)) <- nibble.do(case mod {
     Some(_) -> {
       use id <- nibble.do(nibble.optional(id_parser()))
-      use decl <- nibble.do(module_declarations_parser())
+      use res <- nibble.do(module_declarations_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(#(id, decl))
+      nibble.return(#(id, res))
     }
     None -> {
-      use decl <- nibble.do(module_declarations_parser())
-      nibble.return(#(None, decl))
+      use res <- nibble.do(module_declarations_parser())
+      nibble.return(#(None, res))
     }
   })
+  let #(ctx, new_decl) = create_implicit_func_types(ctx)
+  let decl = rev_prepend(new_decl, decl)
   let mod =
     list.fold(
       decl,
@@ -733,22 +760,34 @@ pub fn module_parser() {
   nibble.return(#(mod, ctx))
 }
 
+fn create_implicit_func_types(ctx: ParseContext) -> #(IdContext, List(Decl)) {
+  let #(_, func_types, decl) =
+    list.fold(ctx.impl, #(ctx.types, ctx.ids.func_types, []), fn(acc, impl) {
+      let #(idx, func_types, decl) = acc
+      use <- bool.guard(dict.has_key(func_types, impl), acc)
+      let t = func_type(list.map(impl.params, Param(None, _)), impl.results)
+      let func_types = dict.insert(func_types, impl, idx)
+      #(idx + 1, func_types, [TypeDecl(t), ..decl])
+    })
+  #(IdContext(..ctx.ids, func_types:), list.reverse(decl))
+}
+
 /// Returns all module declarations in reverse order
 fn module_declarations_parser() {
   let ctx =
-    ParseContext(0, 0, 0, 0, 0, 0, 0, 0, False, False, empty_id_context())
+    ParseContext(0, 0, 0, 0, 0, 0, 0, 0, False, False, empty_id_context(), [])
   use #(ctx, decl) <- nibble.loop(#(ctx, []))
   use res <- nibble.do(decl_parser(ctx) |> nibble.optional)
   case res {
     Some(#(ctx, new_decl)) ->
       nibble.Continue(#(ctx, rev_prepend(new_decl, decl)))
-    None -> nibble.Break(#(ctx.ids, decl))
+    None -> nibble.Break(#(ctx, decl))
   }
   |> nibble.return
 }
 
 /// Prepends the items to the list in reverse order: rev_prepend([2, 1], [3, 4]) -> [1, 2, 3, 4]
-fn rev_prepend(items: List(Decl), list: List(Decl)) -> List(Decl) {
+fn rev_prepend(items: List(a), list: List(a)) -> List(a) {
   case items {
     [] -> list
     [head, ..rest] -> rev_prepend(rest, [head, ..list])
@@ -758,7 +797,7 @@ fn rev_prepend(items: List(Decl), list: List(Decl)) -> List(Decl) {
 fn decl_parser(
   ctx: ParseContext,
 ) -> nibble.Parser(#(ParseContext, List(Decl)), Token, b) {
-  use decls <- nibble.do(
+  use ParseReturn(impl:, decl:) <- nibble.do(
     nibble.one_of([
       rec_type_parser(),
       import_parser(ctx),
@@ -766,28 +805,60 @@ fn decl_parser(
       global_parser(ctx),
       memory_parser(ctx),
       table_parser(ctx),
-      func_parser(ctx),
-      data_parser(),
-      element_parser(),
+      function_parser(ctx),
+      data_parser(ctx),
+      element_parser(ctx),
       start_parser(ctx),
       export_parser(),
     ]),
   )
-  nibble.return(#(update_context(ctx, decls), decls))
+  nibble.return(#(update_context(ctx, impl, decl), decl))
 }
 
-fn update_context(ctx: ParseContext, decls: List(Decl)) -> ParseContext {
+fn update_context(
+  ctx: ParseContext,
+  impl: List(ImplicitFunc),
+  decls: List(Decl),
+) -> ParseContext {
+  let ctx = ParseContext(..ctx, impl: rev_prepend(impl, ctx.impl))
   list.fold(decls, ctx, fn(ctx, decl) {
     case decl {
       TypeDecl(rec_type) -> {
-        list.fold(rec_type.defs, ctx, fn(ctx, t) {
-          let id = ctx.types
-          let ctx = new_type(ctx, t.id)
-          case t.def {
-            Struct(fields:) -> new_field(ctx, id, fields)
-            _ -> ctx
+        // for func_types
+        let new_type_idx = ctx.types
+        let ctx =
+          list.fold(rec_type.defs, ctx, fn(ctx, t) {
+            let id = ctx.types
+            let ctx = new_type(ctx, t.id)
+            case t.def {
+              Struct(fields:) -> new_field(ctx, id, fields)
+              _ -> ctx
+            }
+          })
+        case rec_type {
+          // TODO: any conditions on super?
+          RecType(defs: [
+            TypeDef(sub: Final, super:, def: Func(params:, results:), ..),
+          ]) -> {
+            let params = list.map(params, fn(param) { param.typ })
+            case dict.get(ctx.ids.func_types, ImplicitFunc(params, results)) {
+              Ok(_) -> ctx
+              Error(_) ->
+                ParseContext(
+                  ..ctx,
+                  ids: IdContext(
+                    ..ctx.ids,
+                    func_types: dict.insert(
+                      ctx.ids.func_types,
+                      ImplicitFunc(params, results),
+                      new_type_idx,
+                    ),
+                  ),
+                )
+            }
           }
-        })
+          _ -> ctx
+        }
       }
       ImportDecl(value) ->
         case value {
@@ -923,36 +994,47 @@ fn assign_id(
   }
 }
 
-fn tag_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
+fn tag_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("tag")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
   nibble.one_of([
     {
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
-      use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+      use #(impl, TypeUse(type_:, params:, results:)) <- nibble.do(
+        type_use_parser(),
+      )
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        ImportDecl(ImportTag(
-          module_name:,
-          import_name:,
-          id:,
-          type_:,
-          params:,
-          results:,
-        )),
-        ..exports
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          ImportDecl(ImportTag(
+            module_name:,
+            import_name:,
+            id:,
+            type_:,
+            params:,
+            results:,
+          )),
+          ..exports
+        ]),
+      )
     },
     {
-      use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+      use #(impl, TypeUse(type_:, params:, results:)) <- nibble.do(
+        type_use_parser(),
+      )
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([TagDecl(Tag(id:, type_:, params:, results:)), ..exports])
+      nibble.return(
+        ParseReturn(impl, [
+          TagDecl(Tag(id:, type_:, params:, results:)),
+          ..exports
+        ]),
+      )
     },
   ])
 }
 
-fn export_parser() -> nibble.Parser(List(Decl), Token, b) {
+fn export_parser() {
   use _ <- nibble.do(nibble.token(LKeyword("export")))
   use export_name <- nibble.do(string_parser())
   use export <- nibble.do(nibble.one_of(
@@ -972,10 +1054,10 @@ fn export_parser() -> nibble.Parser(List(Decl), Token, b) {
     }),
   ))
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return([ExportDecl(export)])
+  nibble.return(ExportDecl(export) |> ret_one)
 }
 
-fn import_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
+fn import_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("import")))
   use _ <- nibble.do(nibble.guard(
     !ctx.non_import_defs,
@@ -988,122 +1070,156 @@ fn import_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
       {
         use _ <- nibble.do(nibble.token(LKeyword("tag")))
         use id <- nibble.do(id_parser() |> nibble.optional)
-        use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+        use #(impl, TypeUse(type_:, params:, results:)) <- nibble.do(
+          type_use_parser(),
+        )
         use _ <- nibble.do(nibble.token(RParen))
-        nibble.return(ImportTag(
-          module_name:,
-          import_name:,
-          id:,
-          type_:,
-          params:,
-          results:,
-        ))
+        nibble.return(
+          ParseReturn(impl, [
+            ImportDecl(ImportTag(
+              module_name:,
+              import_name:,
+              id:,
+              type_:,
+              params:,
+              results:,
+            )),
+          ]),
+        )
       },
       {
         use _ <- nibble.do(nibble.token(LKeyword("global")))
         use id <- nibble.do(id_parser() |> nibble.optional)
         use #(mutability, value_type) <- nibble.do(global_type_parser())
         use _ <- nibble.do(nibble.token(RParen))
-        nibble.return(ImportGlobal(
-          module_name:,
-          import_name:,
-          id:,
-          mutability:,
-          value_type:,
-        ))
+        nibble.return(
+          ImportDecl(ImportGlobal(
+            module_name:,
+            import_name:,
+            id:,
+            mutability:,
+            value_type:,
+          ))
+          |> ret_one,
+        )
       },
       {
         use _ <- nibble.do(nibble.token(LKeyword("memory")))
         use id <- nibble.do(id_parser() |> nibble.optional)
         use #(address_type, limits) <- nibble.do(memory_type_parser())
         use _ <- nibble.do(nibble.token(RParen))
-        nibble.return(ImportMemory(
-          module_name:,
-          import_name:,
-          id:,
-          address_type:,
-          limits:,
-        ))
+        nibble.return(
+          ImportDecl(ImportMemory(
+            module_name:,
+            import_name:,
+            id:,
+            address_type:,
+            limits:,
+          ))
+          |> ret_one,
+        )
       },
       {
         use _ <- nibble.do(nibble.token(LKeyword("table")))
         use id <- nibble.do(id_parser() |> nibble.optional)
         use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
         use _ <- nibble.do(nibble.token(RParen))
-        nibble.return(ImportTable(
-          module_name:,
-          import_name:,
-          id:,
-          address_type:,
-          limits:,
-          ref_type:,
-        ))
+        nibble.return(
+          ImportDecl(ImportTable(
+            module_name:,
+            import_name:,
+            id:,
+            address_type:,
+            limits:,
+            ref_type:,
+          ))
+          |> ret_one,
+        )
       },
       {
         use _ <- nibble.do(nibble.token(LKeyword("func")))
         use id <- nibble.do(id_parser() |> nibble.optional)
-        use TypeUse(type_:, params:, results:) <- nibble.do(type_use_parser())
+        use #(impl, TypeUse(type_:, params:, results:)) <- nibble.do(
+          type_use_parser(),
+        )
         use _ <- nibble.do(nibble.token(RParen))
-        nibble.return(ImportFunction(
-          module_name:,
-          import_name:,
-          id:,
-          type_:,
-          params:,
-          results:,
-        ))
+        nibble.return(
+          ParseReturn(impl, [
+            ImportDecl(ImportFunction(
+              module_name:,
+              import_name:,
+              id:,
+              type_:,
+              params:,
+              results:,
+            )),
+          ]),
+        )
       },
     ]),
   )
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return([ImportDecl(import_)])
+  nibble.return(import_)
 }
 
-fn start_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
+fn start_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("start")))
   use function_index <- nibble.do(index_parser())
   use _ <- nibble.do(nibble.token(RParen))
   case ctx.start {
     True -> nibble.fail("at most one start function may occur in a module")
-    False -> nibble.return([StartDecl(Start(function_index:))])
+    False -> nibble.return(StartDecl(Start(function_index:)) |> ret_one)
   }
 }
 
-fn element_parser() -> nibble.Parser(List(Decl), Token, b) {
+fn element_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("elem")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   nibble.one_of([
     {
       // declarative element
       use _ <- nibble.do(nibble.token(Keyword("declare")))
-      use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
+      use #(ref_type, impl, elems) <- nibble.do(elem_list_parser(False, ctx))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        ElementDecl(DeclarativeElement(id:, ref_type:, elems:)),
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          ElementDecl(DeclarativeElement(id:, ref_type:, elems:)),
+        ]),
+      )
     },
     {
       // passive element
-      use #(ref_type, elems) <- nibble.do(elem_list_parser(False))
+      use #(ref_type, impl, elems) <- nibble.do(elem_list_parser(False, ctx))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        ElementDecl(PassiveElement(id:, ref_type:, elems:)),
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          ElementDecl(PassiveElement(id:, ref_type:, elems:)),
+        ]),
+      )
     },
     {
       // active element
       use table_index <- nibble.do(use_parser("table") |> nibble.optional)
-      use offset <- nibble.do(offset_parser())
+      use ExprReturn(impl: impl1, instr: offset) <- nibble.do(offset_parser(ctx))
       // if table use is omitted, the func keyword can be omitted as well
-      use #(ref_type, elems) <- nibble.do(
-        elem_list_parser(option.is_none(table_index)),
-      )
+      use #(ref_type, impl2, elems) <- nibble.do(elem_list_parser(
+        option.is_none(table_index),
+        ctx,
+      ))
       use _ <- nibble.do(nibble.token(RParen))
       // abbreviation: 𝜖 -> (table 0)
       let table_index = option.unwrap(table_index, IndexInt("0"))
-      nibble.return([
-        ElementDecl(ActiveElement(id:, ref_type:, elems:, table_index:, offset:)),
-      ])
+      nibble.return(
+        ParseReturn(list.append(impl1, impl2), [
+          ElementDecl(ActiveElement(
+            id:,
+            ref_type:,
+            elems:,
+            table_index:,
+            offset:,
+          )),
+        ]),
+      )
     },
   ])
 }
@@ -1117,7 +1233,7 @@ fn inline_exports_parser(new_index: Int, constr) {
   )
 }
 
-fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
+fn table_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("table")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.tables, ExportTable))
@@ -1127,17 +1243,20 @@ fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits, ref_type) <- nibble.do(table_type_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        ImportDecl(ImportTable(
-          module_name:,
-          import_name:,
-          id:,
-          address_type:,
-          limits:,
-          ref_type:,
-        )),
-        ..exports
-      ])
+      nibble.return(
+        [
+          ImportDecl(ImportTable(
+            module_name:,
+            import_name:,
+            id:,
+            address_type:,
+            limits:,
+            ref_type:,
+          )),
+          ..exports
+        ]
+        |> ret_many,
+      )
     },
     {
       use address_type <- nibble.do(address_type_parser())
@@ -1146,7 +1265,10 @@ fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
           // inline elem case
           use ref_type <- nibble.do(ref_type_parser())
           use _ <- nibble.do(nibble.token(LKeyword("elem")))
-          use #(elem_ref_type, elems) <- nibble.do(elem_list_parser(False))
+          use #(elem_ref_type, impl, elems) <- nibble.do(elem_list_parser(
+            False,
+            ctx,
+          ))
           let n = list.length(elems) |> int.to_string
           let limits = Limits(n, Some(n))
           use expr <- nibble.do(case ref_type {
@@ -1162,23 +1284,25 @@ fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
           ]
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return([
-            TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
-            ElementDecl(ActiveElement(
-              id: None,
-              ref_type: elem_ref_type,
-              elems:,
-              table_index: IndexInt(int.to_string(ctx.tables)),
-              offset:,
-            )),
-            ..exports
-          ])
+          nibble.return(
+            ParseReturn(impl, [
+              TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
+              ElementDecl(ActiveElement(
+                id: None,
+                ref_type: elem_ref_type,
+                elems:,
+                table_index: IndexInt(int.to_string(ctx.tables)),
+                offset:,
+              )),
+              ..exports
+            ]),
+          )
         },
         {
           // plain table case
           use limits <- nibble.do(limits_parser())
           use ref_type <- nibble.do(ref_type_parser())
-          use expr <- nibble.do(expr_parser())
+          use ExprReturn(impl:, instr: expr) <- nibble.do(expr_parser(ctx))
           use expr <- nibble.do(case expr, ref_type {
             [], Nullable(ht) -> nibble.return([RefNull(ht)])
             [], _ ->
@@ -1188,10 +1312,12 @@ fn table_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
             _, _ -> nibble.return(expr)
           })
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return([
-            TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
-            ..exports
-          ])
+          nibble.return(
+            ParseReturn(impl, [
+              TableDecl(Table(id:, address_type:, limits:, ref_type:, expr:)),
+              ..exports
+            ]),
+          )
         },
       ])
     },
@@ -1211,7 +1337,12 @@ fn table_type_parser() -> nibble.Parser(
 
 fn elem_list_parser(
   omit_func: Bool,
-) -> nibble.Parser(#(RefType, List(List(Instruction))), Token, b) {
+  ctx: ParseContext,
+) -> nibble.Parser(
+  #(RefType, List(ImplicitFunc), List(List(Instruction))),
+  Token,
+  b,
+) {
   nibble.one_of([
     {
       // explicit ref_type and items case
@@ -1221,16 +1352,18 @@ fn elem_list_parser(
           nibble.one_of([
             {
               use _ <- nibble.do(nibble.token(LKeyword("item")))
-              use expr <- nibble.do(expr_parser())
+              use expr <- nibble.do(expr_parser(ctx))
               use _ <- nibble.do(nibble.token(RParen))
               nibble.return(expr)
             },
             // single folded instruction instead of (item expr)
-            folded_instr_parser(),
+            folded_instr_parser(ctx),
           ])
         }),
       )
-      nibble.return(#(ref_type, items))
+      let impl = list.flat_map(items, fn(item) { item.impl })
+      let items = list.map(items, fn(item) { item.instr })
+      nibble.return(#(ref_type, impl, items))
     },
     {
       // function indices case
@@ -1245,16 +1378,23 @@ fn elem_list_parser(
       })
       use indices <- nibble.do(nibble.many(index_parser()))
       let items = list.map(indices, fn(index) { [RefFunc(index)] })
-      nibble.return(#(NonNull(HeapFunc), items))
+      nibble.return(#(NonNull(HeapFunc), [], items))
     },
   ])
 }
 
-fn expr_parser() -> nibble.Parser(List(Instruction), Token, b) {
-  nibble.many(instr_parser()) |> nibble.map(list.flatten)
+fn expr_parser(ctx: ParseContext) -> nibble.Parser(ExprReturn, Token, b) {
+  nibble.many(instr_parser(ctx)) |> nibble.map(flatten_expr)
 }
 
-fn data_parser() {
+fn flatten_expr(vals: List(ExprReturn)) -> ExprReturn {
+  ExprReturn(
+    impl: list.flat_map(vals, fn(val) { val.impl }),
+    instr: list.flat_map(vals, fn(val) { val.instr }),
+  )
+}
+
+fn data_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("data")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   nibble.one_of([
@@ -1262,9 +1402,7 @@ fn data_parser() {
       // passive data
       use data <- nibble.do(string_bytes_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        DataDecl(PassiveData(id:, data:)),
-      ])
+      nibble.return(DataDecl(PassiveData(id:, data:)) |> ret_one)
     },
     {
       // active data
@@ -1273,26 +1411,28 @@ fn data_parser() {
         // abbreviation: 𝜖 -> (memory 0)
         IndexInt("0"),
       ))
-      use offset <- nibble.do(offset_parser())
+      use ExprReturn(impl:, instr: offset) <- nibble.do(offset_parser(ctx))
       use data <- nibble.do(string_bytes_parser())
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        DataDecl(ActiveData(id:, data:, memory_index:, offset:)),
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          DataDecl(ActiveData(id:, data:, memory_index:, offset:)),
+        ]),
+      )
     },
   ])
 }
 
-fn offset_parser() -> nibble.Parser(List(Instruction), Token, b) {
+fn offset_parser(ctx: ParseContext) -> nibble.Parser(ExprReturn, Token, b) {
   nibble.one_of([
     {
       use _ <- nibble.do(nibble.token(LKeyword("offset")))
-      use expr <- nibble.do(expr_parser())
+      use expr <- nibble.do(expr_parser(ctx))
       use _ <- nibble.do(nibble.token(RParen))
       nibble.return(expr)
     },
     // abbreviation: single folded instruction instead of (offset expr)
-    folded_instr_parser(),
+    folded_instr_parser(ctx),
   ])
 }
 
@@ -1314,16 +1454,19 @@ fn memory_parser(ctx: ParseContext) {
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(address_type, limits) <- nibble.do(memory_type_parser())
-      nibble.return([
-        ImportDecl(ImportMemory(
-          module_name:,
-          import_name:,
-          id:,
-          address_type:,
-          limits:,
-        )),
-        ..exports
-      ])
+      nibble.return(
+        [
+          ImportDecl(ImportMemory(
+            module_name:,
+            import_name:,
+            id:,
+            address_type:,
+            limits:,
+          )),
+          ..exports
+        ]
+        |> ret_many,
+      )
     },
     {
       use address_type <- nibble.do(address_type_parser())
@@ -1338,28 +1481,34 @@ fn memory_parser(ctx: ParseContext) {
             |> int.to_string
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return([
-            MemoryDecl(Memory(id:, address_type:, limits: Limits(n, Some(n)))),
-            DataDecl(
-              ActiveData(
-                id: None,
-                data:,
-                memory_index: IndexInt(ctx.memories |> int.to_string),
-                offset: [
-                  I32Const("0"),
-                ],
+          nibble.return(
+            [
+              MemoryDecl(Memory(id:, address_type:, limits: Limits(n, Some(n)))),
+              DataDecl(
+                ActiveData(
+                  id: None,
+                  data:,
+                  memory_index: IndexInt(ctx.memories |> int.to_string),
+                  offset: [
+                    I32Const("0"),
+                  ],
+                ),
               ),
-            ),
-            ..exports
-          ])
+              ..exports
+            ]
+            |> ret_many,
+          )
         },
         {
           // plain memory case
           use limits <- nibble.do(limits_parser())
           use _ <- nibble.do(nibble.token(RParen))
-          nibble.return([
-            MemoryDecl(Memory(id:, address_type:, limits:)),
-          ])
+          nibble.return(
+            [
+              MemoryDecl(Memory(id:, address_type:, limits:)),
+            ]
+            |> ret_many,
+          )
         },
       ])
     },
@@ -1437,7 +1586,7 @@ fn address_type_parser() -> nibble.Parser(AddressType, Token, b) {
   )
 }
 
-fn global_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
+fn global_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("global")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.globals, ExportGlobal))
@@ -1446,25 +1595,30 @@ fn global_parser(ctx: ParseContext) -> nibble.Parser(List(Decl), Token, b) {
       // inline import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
       use #(mutability, value_type) <- nibble.do(global_type_parser())
-      nibble.return([
-        ImportDecl(ImportGlobal(
-          module_name:,
-          import_name:,
-          id:,
-          mutability:,
-          value_type:,
-        )),
-        ..exports
-      ])
+      nibble.return(
+        [
+          ImportDecl(ImportGlobal(
+            module_name:,
+            import_name:,
+            id:,
+            mutability:,
+            value_type:,
+          )),
+          ..exports
+        ]
+        |> ret_many,
+      )
     },
     {
       use #(mutability, value_type) <- nibble.do(global_type_parser())
-      use expr <- nibble.do(expr_parser())
+      use ExprReturn(impl, instr: expr) <- nibble.do(expr_parser(ctx))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        GlobalDecl(Global(id:, mutability:, value_type:, expr:)),
-        ..exports
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          GlobalDecl(Global(id:, mutability:, value_type:, expr:)),
+          ..exports
+        ]),
+      )
     },
   ])
 }
@@ -1484,7 +1638,7 @@ fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
   ])
 }
 
-pub fn rec_type_parser() {
+fn rec_type_parser() {
   nibble.one_of([
     {
       use _ <- nibble.do(nibble.token(LKeyword("rec")))
@@ -1494,7 +1648,7 @@ pub fn rec_type_parser() {
     },
     type_def_parser() |> nibble.map(fn(t) { [t] }),
   ])
-  |> nibble.map(fn(t) { [TypeDecl(RecType(t))] })
+  |> nibble.map(fn(t) { TypeDecl(RecType(t)) |> ret_one })
 }
 
 fn type_def_parser() -> nibble.Parser(TypeDef, Token, b) {
@@ -1609,7 +1763,7 @@ fn storage_type_parser() -> nibble.Parser(FieldType, Token, b) {
   ])
 }
 
-fn func_parser(ctx: ParseContext) {
+fn function_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("func")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use exports <- nibble.do(inline_exports_parser(ctx.functions, ExportFunction))
@@ -1617,42 +1771,53 @@ fn func_parser(ctx: ParseContext) {
     {
       // import case
       use #(module_name, import_name) <- nibble.do(inline_import_parser(ctx))
-      use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
+      use #(impl, TypeUse(type_, params, results)) <- nibble.do(
+        type_use_parser(),
+      )
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        ImportDecl(ImportFunction(
-          module_name:,
-          import_name:,
-          id:,
-          type_:,
-          params:,
-          results:,
-        )),
-        ..exports
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          ImportDecl(ImportFunction(
+            module_name:,
+            import_name:,
+            id:,
+            type_:,
+            params:,
+            results:,
+          )),
+          ..exports
+        ]),
+      )
     },
     {
       // inline function
-      use TypeUse(type_, params, results) <- nibble.do(type_use_parser())
+      use #(impl1, TypeUse(type_, params, results)) <- nibble.do(
+        type_use_parser(),
+      )
       use locals <- nibble.do(
         nibble.many(local_parser()) |> nibble.map(list.flatten),
       )
-      use expr <- nibble.do(expr_parser())
+      use ExprReturn(impl: impl2, instr: expr) <- nibble.do(expr_parser(ctx))
+      let impl = list.append(impl1, impl2)
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return([
-        FunctionDecl(Function(id:, type_:, params:, results:, locals:, expr:)),
-        ..exports
-      ])
+      nibble.return(
+        ParseReturn(impl, [
+          FunctionDecl(Function(id:, type_:, params:, results:, locals:, expr:)),
+          ..exports
+        ]),
+      )
     },
   ])
 }
 
-fn instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
-  basic_instr_parser(AnyInstr)
+fn instr_parser(ctx: ParseContext) -> nibble.Parser(ExprReturn, Token, a) {
+  basic_instr_parser(AnyInstr, ctx)
 }
 
-fn folded_instr_parser() -> nibble.Parser(List(Instruction), Token, a) {
-  basic_instr_parser(FoldedInstr)
+fn folded_instr_parser(
+  ctx: ParseContext,
+) -> nibble.Parser(ExprReturn, Token, a) {
+  basic_instr_parser(FoldedInstr, ctx)
 }
 
 type InstructionKind {
@@ -1663,7 +1828,8 @@ type InstructionKind {
 
 fn basic_instr_parser(
   kind: InstructionKind,
-) -> nibble.Parser(List(Instruction), Token, a) {
+  ctx: ParseContext,
+) -> nibble.Parser(ExprReturn, Token, a) {
   use kw <- nibble.do(
     nibble.take_if("instr", fn(token) {
       case token, kind {
@@ -1677,7 +1843,8 @@ fn basic_instr_parser(
     Keyword(name) | LKeyword(name) -> name
     _ -> panic
   }
-  let r = fn(instr) { nibble.return([instr]) }
+  let r = fn(instr) { nibble.return(ExprReturn([], [instr])) }
+  let m = fn(parser) { nibble.map(parser, ExprReturn([], _)) }
   use expr <- nibble.do(case name {
     // parametric instructions
     "nop" -> r(Nop)
@@ -1690,36 +1857,36 @@ fn basic_instr_parser(
     // control instructions
     "block" -> {
       use label <- nibble.do(nibble.optional(id_parser()))
-      use block_type <- nibble.do(block_type_parser())
-      r(Block(label, block_type))
+      use #(impl, block_type) <- nibble.do(block_type_parser())
+      ExprReturn(impl, [Block(label, block_type)]) |> nibble.return
     }
     "loop" -> {
       use label <- nibble.do(nibble.optional(id_parser()))
-      use block_type <- nibble.do(block_type_parser())
-      r(Loop(label, block_type))
+      use #(impl, block_type) <- nibble.do(block_type_parser())
+      ExprReturn(impl, [Loop(label, block_type)]) |> nibble.return
     }
     "if" -> {
       use label <- nibble.do(nibble.optional(id_parser()))
       case kw {
-        LKeyword(..) -> folded_if_parser(label)
+        LKeyword(..) -> folded_if_parser(label, ctx)
         _ -> {
-          use block_type <- nibble.do(block_type_parser())
-          r(If(label, block_type))
+          use #(impl, block_type) <- nibble.do(block_type_parser())
+          ExprReturn(impl, [If(label, block_type)]) |> nibble.return
         }
       }
     }
-    "else" -> one_arg_parser(nibble.optional(id_parser()), Else)
-    "end" -> one_arg_parser(nibble.optional(id_parser()), End)
+    "else" -> one_arg_parser(nibble.optional(id_parser()), Else) |> m
+    "end" -> one_arg_parser(nibble.optional(id_parser()), End) |> m
     // TODO: try/catch
-    "br" -> one_arg_parser(index_parser(), Branch)
-    "br_if" -> one_arg_parser(index_parser(), BranchIf)
+    "br" -> one_arg_parser(index_parser(), Branch) |> m
+    "br_if" -> one_arg_parser(index_parser(), BranchIf) |> m
     "br_table" -> {
       use labels <- nibble.do(nibble.many1(index_parser()))
       let assert [default, ..labels] = list.reverse(labels)
       let labels = list.reverse(labels)
       r(BranchTable(labels, default))
     }
-    "br_on_null" -> one_arg_parser(index_parser(), BranchOnNull)
+    "br_on_null" -> one_arg_parser(index_parser(), BranchOnNull) |> m
     "br_on_cast" ->
       three_arg_parser(
         index_parser(),
@@ -1727,6 +1894,7 @@ fn basic_instr_parser(
         ref_type_parser(),
         BranchOnCast,
       )
+      |> m
     "br_on_cast_fail" ->
       three_arg_parser(
         index_parser(),
@@ -1734,33 +1902,34 @@ fn basic_instr_parser(
         ref_type_parser(),
         BranchOnCastFail,
       )
-    "call" -> one_arg_parser(index_parser(), Call)
-    "call_ref" -> one_arg_parser(index_parser(), CallRef)
-    "call_indirect" -> call_indirect_parser(CallIndirect)
+      |> m
+    "call" -> one_arg_parser(index_parser(), Call) |> m
+    "call_ref" -> one_arg_parser(index_parser(), CallRef) |> m
+    "call_indirect" -> call_indirect_parser(CallIndirect) |> m
     "return" -> r(Return)
-    "return_call" -> one_arg_parser(index_parser(), ReturnCall)
-    "return_call_ref" -> one_arg_parser(index_parser(), ReturnCallRef)
-    "return_call_indirect" -> call_indirect_parser(ReturnCallIndirect)
+    "return_call" -> one_arg_parser(index_parser(), ReturnCall) |> m
+    "return_call_ref" -> one_arg_parser(index_parser(), ReturnCallRef) |> m
+    "return_call_indirect" -> call_indirect_parser(ReturnCallIndirect) |> m
     // "throw" -> todo
     // "throw_ref" -> todo
     // variable instructions
-    "local.get" -> one_arg_parser(index_parser(), LocalGet)
-    "local.set" -> one_arg_parser(index_parser(), LocalSet)
-    "local.tee" -> one_arg_parser(index_parser(), LocalTee)
-    "global.get" -> one_arg_parser(index_parser(), GlobalGet)
-    "global.set" -> one_arg_parser(index_parser(), GlobalSet)
+    "local.get" -> one_arg_parser(index_parser(), LocalGet) |> m
+    "local.set" -> one_arg_parser(index_parser(), LocalSet) |> m
+    "local.tee" -> one_arg_parser(index_parser(), LocalTee) |> m
+    "global.get" -> one_arg_parser(index_parser(), GlobalGet) |> m
+    "global.set" -> one_arg_parser(index_parser(), GlobalSet) |> m
     // table instructions
     "table.get" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGet)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGet) |> m
     "table.set" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSet)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSet) |> m
     "table.size" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSize)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSize) |> m
     "table.grow" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGrow)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGrow) |> m
     "table.copy" ->
       nibble.one_of([
-        two_arg_parser(index_parser(), index_parser(), TableCopy),
+        two_arg_parser(index_parser(), index_parser(), TableCopy) |> m,
         r(TableCopy(IndexInt("0"), IndexInt("0"))),
       ])
     "table.init" -> {
@@ -1772,86 +1941,92 @@ fn basic_instr_parser(
       }
     }
     "elem.drop" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), ElemDrop)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), ElemDrop) |> m
     // memory instructions
-    "i32.load" -> mem_instr_parser(I32Load)
-    "i64.load" -> mem_instr_parser(I64Load)
-    "f32.load" -> mem_instr_parser(F32Load)
-    "f64.load" -> mem_instr_parser(F64Load)
-    "i32.load8_s" -> mem_instr_parser(I32Load8S)
-    "i32.load8_u" -> mem_instr_parser(I32Load8U)
-    "i32.load16_s" -> mem_instr_parser(I32Load16S)
-    "i32.load16_u" -> mem_instr_parser(I32Load16U)
-    "i64.load8_s" -> mem_instr_parser(I64Load8S)
-    "i64.load8_u" -> mem_instr_parser(I64Load8U)
-    "i64.load16_s" -> mem_instr_parser(I64Load16S)
-    "i64.load16_u" -> mem_instr_parser(I64Load16U)
-    "i64.load32_s" -> mem_instr_parser(I64Load32S)
-    "i64.load32_u" -> mem_instr_parser(I64Load32U)
+    "i32.load" -> mem_instr_parser(I32Load) |> m
+    "i64.load" -> mem_instr_parser(I64Load) |> m
+    "f32.load" -> mem_instr_parser(F32Load) |> m
+    "f64.load" -> mem_instr_parser(F64Load) |> m
+    "i32.load8_s" -> mem_instr_parser(I32Load8S) |> m
+    "i32.load8_u" -> mem_instr_parser(I32Load8U) |> m
+    "i32.load16_s" -> mem_instr_parser(I32Load16S) |> m
+    "i32.load16_u" -> mem_instr_parser(I32Load16U) |> m
+    "i64.load8_s" -> mem_instr_parser(I64Load8S) |> m
+    "i64.load8_u" -> mem_instr_parser(I64Load8U) |> m
+    "i64.load16_s" -> mem_instr_parser(I64Load16S) |> m
+    "i64.load16_u" -> mem_instr_parser(I64Load16U) |> m
+    "i64.load32_s" -> mem_instr_parser(I64Load32S) |> m
+    "i64.load32_u" -> mem_instr_parser(I64Load32U) |> m
     // TODO: vector load instructions
-    "i32.store" -> mem_instr_parser(I32Store)
-    "i64.store" -> mem_instr_parser(I64Store)
-    "f32.store" -> mem_instr_parser(F32Store)
-    "f64.store" -> mem_instr_parser(F64Store)
-    "i32.store8" -> mem_instr_parser(I32Store8)
-    "i32.store16" -> mem_instr_parser(I32Store16)
-    "i64.store8" -> mem_instr_parser(I64Store8)
-    "i64.store16" -> mem_instr_parser(I64Store16)
-    "i64.store32" -> mem_instr_parser(I64Store32)
+    "i32.store" -> mem_instr_parser(I32Store) |> m
+    "i64.store" -> mem_instr_parser(I64Store) |> m
+    "f32.store" -> mem_instr_parser(F32Store) |> m
+    "f64.store" -> mem_instr_parser(F64Store) |> m
+    "i32.store8" -> mem_instr_parser(I32Store8) |> m
+    "i32.store16" -> mem_instr_parser(I32Store16) |> m
+    "i64.store8" -> mem_instr_parser(I64Store8) |> m
+    "i64.store16" -> mem_instr_parser(I64Store16) |> m
+    "i64.store32" -> mem_instr_parser(I64Store32) |> m
     // TODO: vector store instructions
     "memory.size" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemorySize)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemorySize) |> m
     "memory.grow" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryGrow)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryGrow) |> m
     "memory.fill" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryFill)
+      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryFill) |> m
     "memory.copy" -> todo as "two optional index args"
     "memory.init" -> todo as "memory index optional, data index required"
-    "data.drop" -> one_arg_parser(index_parser(), DataDrop)
+    "data.drop" -> one_arg_parser(index_parser(), DataDrop) |> m
     // reference instructions
-    "ref.null" -> one_arg_parser(heap_type_parser(), RefNull)
-    "ref.func" -> one_arg_parser(index_parser(), RefFunc)
+    "ref.null" -> one_arg_parser(heap_type_parser(), RefNull) |> m
+    "ref.func" -> one_arg_parser(index_parser(), RefFunc) |> m
     "ref.is_null" -> r(RefIsNull)
     "ref.as_non_null" -> r(RefAsNonNull)
     "ref.eq" -> r(RefEq)
-    "ref.test" -> one_arg_parser(ref_type_parser(), RefTest)
-    "ref.cast" -> one_arg_parser(ref_type_parser(), RefCast)
+    "ref.test" -> one_arg_parser(ref_type_parser(), RefTest) |> m
+    "ref.cast" -> one_arg_parser(ref_type_parser(), RefCast) |> m
     // aggregate instructions
     "ref.i31" -> r(RefI31)
     "i31.get_s" -> r(I31GetS)
     "i31.get_u" -> r(I31GetU)
-    "struct.new" -> one_arg_parser(index_parser(), StructNew)
-    "struct.new_default" -> one_arg_parser(index_parser(), StructNewDefault)
-    "struct.get" -> two_arg_parser(index_parser(), index_parser(), StructGet)
-    "struct.get_s" -> two_arg_parser(index_parser(), index_parser(), StructGetS)
-    "struct.get_u" -> two_arg_parser(index_parser(), index_parser(), StructGetU)
-    "struct.set" -> two_arg_parser(index_parser(), index_parser(), StructSet)
-    "array.new" -> one_arg_parser(index_parser(), ArrayNew)
-    "array.new_default" -> one_arg_parser(index_parser(), ArrayNewDefault)
+    "struct.new" -> one_arg_parser(index_parser(), StructNew) |> m
+    "struct.new_default" ->
+      one_arg_parser(index_parser(), StructNewDefault) |> m
+    "struct.get" ->
+      two_arg_parser(index_parser(), index_parser(), StructGet) |> m
+    "struct.get_s" ->
+      two_arg_parser(index_parser(), index_parser(), StructGetS) |> m
+    "struct.get_u" ->
+      two_arg_parser(index_parser(), index_parser(), StructGetU) |> m
+    "struct.set" ->
+      two_arg_parser(index_parser(), index_parser(), StructSet) |> m
+    "array.new" -> one_arg_parser(index_parser(), ArrayNew) |> m
+    "array.new_default" -> one_arg_parser(index_parser(), ArrayNewDefault) |> m
     "array.new_fixed" ->
-      two_arg_parser(index_parser(), int_parser(), ArrayNewFixed)
+      two_arg_parser(index_parser(), int_parser(), ArrayNewFixed) |> m
     "array.new_data" ->
-      two_arg_parser(index_parser(), index_parser(), ArrayNewData)
+      two_arg_parser(index_parser(), index_parser(), ArrayNewData) |> m
     "array.new_elem" ->
-      two_arg_parser(index_parser(), index_parser(), ArrayNewElem)
-    "array.get" -> one_arg_parser(index_parser(), ArrayGet)
-    "array.get_s" -> one_arg_parser(index_parser(), ArrayGetS)
-    "array.get_u" -> one_arg_parser(index_parser(), ArrayGetU)
-    "array.set" -> one_arg_parser(index_parser(), ArraySet)
+      two_arg_parser(index_parser(), index_parser(), ArrayNewElem) |> m
+    "array.get" -> one_arg_parser(index_parser(), ArrayGet) |> m
+    "array.get_s" -> one_arg_parser(index_parser(), ArrayGetS) |> m
+    "array.get_u" -> one_arg_parser(index_parser(), ArrayGetU) |> m
+    "array.set" -> one_arg_parser(index_parser(), ArraySet) |> m
     "array.len" -> r(ArrayLen)
-    "array.fill" -> one_arg_parser(index_parser(), ArrayFill)
-    "array.copy" -> two_arg_parser(index_parser(), index_parser(), ArrayCopy)
+    "array.fill" -> one_arg_parser(index_parser(), ArrayFill) |> m
+    "array.copy" ->
+      two_arg_parser(index_parser(), index_parser(), ArrayCopy) |> m
     "array.init_data" ->
-      two_arg_parser(index_parser(), index_parser(), ArrayInitData)
+      two_arg_parser(index_parser(), index_parser(), ArrayInitData) |> m
     "array.init_elem" ->
-      two_arg_parser(index_parser(), index_parser(), ArrayInitElem)
+      two_arg_parser(index_parser(), index_parser(), ArrayInitElem) |> m
     "any.convert_extern" -> r(AnyConvertExtern)
     "extern.convert_any" -> r(ExternConvertAny)
     // numeric instructions
-    "i32.const" -> one_arg_parser(int_parser(), I32Const)
-    "i64.const" -> one_arg_parser(int_parser(), I64Const)
-    "f32.const" -> one_arg_parser(float_parser(), F32Const)
-    "f64.const" -> one_arg_parser(float_parser(), F64Const)
+    "i32.const" -> one_arg_parser(int_parser(), I32Const) |> m
+    "i64.const" -> one_arg_parser(int_parser(), I64Const) |> m
+    "f32.const" -> one_arg_parser(float_parser(), F32Const) |> m
+    "f64.const" -> one_arg_parser(float_parser(), F64Const) |> m
     "i32.eqz" -> r(I32EqZ)
     "i32.eq" -> r(I32Eq)
     "i32.ne" -> r(I32NE)
@@ -1967,15 +2142,23 @@ fn basic_instr_parser(
     }
     LKeyword("block") | LKeyword("loop") -> {
       // folded blocks have nested instructions, not arguments
-      use instrs <- nibble.do(expr_parser())
+      let ExprReturn(impl: impl1, instr: expr) = expr
+      use ExprReturn(impl: impl2, instr:) <- nibble.do(expr_parser(ctx))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(list.flatten([expr, instrs, [End(None)]]))
+      nibble.return(ExprReturn(
+        list.append(impl1, impl2),
+        list.flatten([expr, instr, [End(None)]]),
+      ))
     }
     LKeyword(_) -> {
       // plain folded instructions have their arguments prepended
-      use args <- nibble.do(expr_parser())
+      let ExprReturn(impl: impl2, instr: expr) = expr
+      use ExprReturn(impl: impl1, instr: args) <- nibble.do(expr_parser(ctx))
       use _ <- nibble.do(nibble.token(RParen))
-      nibble.return(list.append(args, expr))
+      nibble.return(ExprReturn(
+        list.append(impl1, impl2),
+        list.append(args, expr),
+      ))
     }
     _ -> nibble.return(expr)
   }
@@ -1985,63 +2168,82 @@ fn call_indirect_parser(constr) {
   use table_index <- nibble.do(index_parser() |> nibble.optional)
   let table_index = option.unwrap(table_index, IndexInt("0"))
   use type_ <- nibble.do(nibble.optional(func_type_parser()))
-  use params <- nibble.do(nibble.many(result_like_parser("param")))
-  use results <- nibble.do(nibble.many(result_parser()))
+  use params <- nibble.do(
+    nibble.many(result_like_parser("param")) |> nibble.map(list.flatten),
+  )
+  use results <- nibble.do(
+    nibble.many(result_parser()) |> nibble.map(list.flatten),
+  )
+  let type_ = option.unwrap(type_, IndexImplicit(ImplicitFunc(params, results)))
   nibble.return([
-    constr(table_index, type_, list.flatten(params), list.flatten(results)),
+    constr(table_index, type_, params, results),
   ])
 }
 
 fn folded_if_parser(
   label: Option(String),
-) -> nibble.Parser(List(Instruction), Token, a) {
-  use block_type <- nibble.do(block_type_parser())
-  use args <- nibble.do(nibble.many(folded_instr_parser()))
-  use then <- nibble.do(then_parser())
-  use else_ <- nibble.do(nibble.optional(else_parser()))
-  let if_ = If(label: label, block_type:)
-  let else_ = case else_ {
-    None -> []
-    Some(expr) -> [Else(None), ..expr]
-  }
-  nibble.return(
-    list.flatten([list.flatten(args), [if_], then, else_, [End(None)]]),
+  ctx: ParseContext,
+) -> nibble.Parser(ExprReturn, Token, a) {
+  use #(impl0, block_type) <- nibble.do(block_type_parser())
+  use ExprReturn(impl: impl1, instr: args) <- nibble.do(
+    nibble.many(folded_instr_parser(ctx)) |> nibble.map(flatten_expr),
   )
+  use ExprReturn(impl: impl2, instr: then) <- nibble.do(then_parser(ctx))
+  use else_ <- nibble.do(nibble.optional(else_parser(ctx)))
+  let if_ = If(label: label, block_type:)
+  let #(impl3, else_) = case else_ {
+    None -> #([], [])
+    Some(ExprReturn(impl:, instr:)) -> #(impl, [Else(None), ..instr])
+  }
+  nibble.return(ExprReturn(
+    list.flatten([impl0, impl1, impl2, impl3]),
+    list.flatten([args, [if_], then, else_, [End(None)]]),
+  ))
 }
 
-fn then_parser() {
+fn then_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("then")))
-  use expr <- nibble.do(expr_parser())
+  use expr <- nibble.do(expr_parser(ctx))
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(expr)
 }
 
-fn else_parser() {
+fn else_parser(ctx: ParseContext) {
   use _ <- nibble.do(nibble.token(LKeyword("else")))
-  use expr <- nibble.do(expr_parser())
+  use expr <- nibble.do(expr_parser(ctx))
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(expr)
 }
 
 fn block_type_parser() {
-  use t <- nibble.do(type_use_parser())
-  nibble.return(block_type(t))
+  use #(impl, t) <- nibble.do(type_use_parser())
+  let #(impl, bt) = case t {
+    TypeUse(IndexImplicit(_), [], []) -> #([], BlockEmpty)
+    TypeUse(IndexImplicit(_), [], [result]) -> #([], BlockResult(result))
+    TypeUse(type_:, params:, results:) -> #(
+      impl,
+      BlockTypeUse(type_:, params:, results:),
+    )
+  }
+  nibble.return(#(impl, bt))
 }
 
 fn type_use_parser() {
   use type_ <- nibble.do(nibble.optional(func_type_parser()))
-  use params <- nibble.do(nibble.many(param_parser()))
-  use results <- nibble.do(nibble.many(result_parser()))
-  nibble.return(TypeUse(type_, list.flatten(params), list.flatten(results)))
-}
-
-fn block_type(t: TypeUse) -> BlockType {
-  case t {
-    TypeUse(None, [], []) -> BlockEmpty
-    TypeUse(None, [], [result]) -> BlockResult(result)
-    TypeUse(type_:, params:, results:) ->
-      BlockTypeUse(type_:, params:, results:)
+  use params <- nibble.do(
+    nibble.many(param_parser()) |> nibble.map(list.flatten),
+  )
+  use results <- nibble.do(
+    nibble.many(result_parser()) |> nibble.map(list.flatten),
+  )
+  let #(impl, type_) = case type_ {
+    Some(type_) -> #([], type_)
+    None -> {
+      let impl = implicit_func(params, results)
+      #([impl], IndexImplicit(impl))
+    }
   }
+  nibble.return(#(impl, TypeUse(type_, params, results)))
 }
 
 fn mem_instr_parser(
@@ -2297,11 +2499,10 @@ fn resolve_ids_comp_type(
       Array(item_type:)
     }
     Func(params:, results:) -> {
-      let tu = TypeUse(None, params, results)
-      use TypeUse(_, params:, results:) <- result.map(resolve_ids_type_use(
-        tu,
-        ctx,
-      ))
+      use params <- result.try(list.try_map(params, resolve_ids_param(_, ctx)))
+      use results <- result.map(
+        list.try_map(results, resolve_ids_value_type(_, ctx)),
+      )
       Func(params:, results:)
     }
   }
@@ -2369,7 +2570,6 @@ fn resolve_ids_function(
     ctx,
   ))
   use locals <- result.try(list.try_map(locals, resolve_ids_param(_, ctx)))
-  // TODO: extend the ID context with params/locals
   let local_indices =
     list.append(params, locals)
     |> list.index_map(fn(param, idx) {
@@ -2458,7 +2658,7 @@ fn resolve_ids_type_use(
   tu: TypeUse,
   ctx: IdContext,
 ) -> Result(TypeUse, String) {
-  use type_ <- result.try(resolve_id_optional(tu.type_, ctx.types, "type"))
+  use type_ <- result.try(resolve_type(tu.type_, ctx))
   use params <- result.try(list.try_map(tu.params, resolve_ids_param(_, ctx)))
   use results <- result.map(
     list.try_map(tu.results, resolve_ids_value_type(_, ctx)),
@@ -2569,7 +2769,7 @@ fn resolve_ids_instr(
       result.map(resolve_function(function_index, ctx), Call)
     CallIndirect(table_index:, type_:, params:, results:) -> {
       use table_index <- result.try(resolve_table(table_index, ctx))
-      use type_ <- result.try(resolve_id_optional(type_, ctx.types, "type"))
+      use type_ <- result.try(resolve_type(type_, ctx))
       use params <- result.try(
         list.try_map(params, resolve_ids_value_type(_, ctx)),
       )
@@ -2582,7 +2782,7 @@ fn resolve_ids_instr(
       result.map(resolve_function(function_index, ctx), ReturnCall)
     ReturnCallIndirect(table_index:, type_:, params:, results:) -> {
       use table_index <- result.try(resolve_table(table_index, ctx))
-      use type_ <- result.try(resolve_id_optional(type_, ctx.types, "type"))
+      use type_ <- result.try(resolve_type(type_, ctx))
       use params <- result.try(
         list.try_map(params, resolve_ids_value_type(_, ctx)),
       )
@@ -2909,7 +3109,14 @@ fn resolve_ids_block_type(
 }
 
 fn resolve_type(type_index: Index, ctx: IdContext) -> Result(Index, String) {
-  resolve_id(type_index, ctx.types, "type")
+  case type_index {
+    IndexInt(_) -> Ok(type_index)
+    IndexId(_) -> resolve_id(type_index, ctx.types, "type")
+    IndexImplicit(i) ->
+      dict.get(ctx.func_types, i)
+      |> result.map(fn(i) { IndexInt(int.to_string(i)) })
+      |> result.replace_error("missing implicit func type")
+  }
 }
 
 fn resolve_tag(tag_index: Index, ctx: IdContext) -> Result(Index, String) {
@@ -2965,6 +3172,7 @@ fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Index, String) {
       |> result.map(pair.first)
       |> result.map(IndexInt)
       |> result.replace_error("label not found: " <> id)
+    IndexImplicit(_) -> panic
   }
 }
 
@@ -2982,17 +3190,7 @@ fn resolve_field(
         Ok(index) -> Ok(IndexInt(int.to_string(index)))
         Error(_) -> Error("field not found: " <> id)
       }
-  }
-}
-
-fn resolve_id_optional(
-  index: Option(Index),
-  ids: Dict(String, Int),
-  where: String,
-) -> Result(Option(Index), String) {
-  case index {
-    Some(index) -> result.map(resolve_id(index, ids, where), Some)
-    None -> Ok(None)
+    IndexImplicit(_) -> panic
   }
 }
 
@@ -3008,5 +3206,6 @@ fn resolve_id(
         Ok(index) -> Ok(IndexInt(int.to_string(index)))
         Error(_) -> Error(where <> " not found: " <> id)
       }
+    IndexImplicit(_) -> panic as { "implicit index for " <> where }
   }
 }

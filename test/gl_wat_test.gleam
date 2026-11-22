@@ -82,7 +82,14 @@ pub fn id_lexer_test() {
 }
 
 pub fn parse_func_empty_test() {
-  let assert Ok(w.Function(None, None, [], [], [], [])) = parse_func("(func)")
+  let assert Ok(w.Function(
+    None,
+    w.IndexImplicit(w.ImplicitFunc([], [])),
+    [],
+    [],
+    [],
+    [],
+  )) = parse_func("(func)")
 }
 
 pub fn parse_func_invalid_test() {
@@ -155,10 +162,10 @@ pub fn parse_func_with_two_locals_test() {
 }
 
 pub fn parse_func_with_type_test() {
-  let assert Ok(w.Function(type_: Some(w.IndexInt("3")), ..)) =
+  let assert Ok(w.Function(type_: w.IndexInt("3"), ..)) =
     parse_func("(func (type 3))")
 
-  let assert Ok(w.Function(type_: Some(w.IndexId("$ft")), ..)) =
+  let assert Ok(w.Function(type_: w.IndexId("$ft"), ..)) =
     parse_func("(func (type $ft))")
 
   let assert Error(_) = parse_func("(func (type 3 4))")
@@ -225,7 +232,14 @@ pub fn parse_block_result_test() {
 pub fn parse_block_multiple_results_test() {
   let assert Ok(w.Function(
     expr: [
-      w.Block(Some("$b"), w.BlockTypeUse(None, [], [w.I32, w.F32])),
+      w.Block(
+        Some("$b"),
+        w.BlockTypeUse(
+          w.IndexImplicit(w.ImplicitFunc([], [w.I32, w.F32])),
+          [],
+          [w.I32, w.F32],
+        ),
+      ),
       w.End(None),
     ],
     ..,
@@ -238,7 +252,7 @@ pub fn parse_block_params_test() {
       w.Block(
         Some("$b"),
         w.BlockTypeUse(
-          None,
+          w.IndexImplicit(w.ImplicitFunc([w.I32, w.I32], [w.F32])),
           [w.Param(None, w.I32), w.Param(None, w.I32)],
           [w.F32],
         ),
@@ -251,10 +265,7 @@ pub fn parse_block_params_test() {
 
 pub fn parse_block_type_test() {
   let assert Ok(w.Function(
-    expr: [
-      w.Block(None, w.BlockTypeUse(Some(w.IndexInt("0")), [], [])),
-      w.End(None),
-    ],
+    expr: [w.Block(None, w.BlockTypeUse(w.IndexInt("0"), [], [])), w.End(None)],
     ..,
   )) = parse_func("(func (block (type 0)))")
 }
@@ -335,12 +346,7 @@ pub fn call_indirect_test() {
   let assert Ok(w.Function(
     expr: [
       w.I32Const("0"),
-      w.CallIndirect(
-        w.IndexInt("0"),
-        Some(w.IndexId("$t")),
-        [w.I32, w.I32],
-        [w.I32],
-      ),
+      w.CallIndirect(w.IndexInt("0"), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
     ],
     ..,
   )) =
@@ -353,12 +359,7 @@ pub fn flat_call_indirect_test() {
   let assert Ok(w.Function(
     expr: [
       w.I32Const("0"),
-      w.CallIndirect(
-        w.IndexInt("0"),
-        Some(w.IndexId("$t")),
-        [w.I32, w.I32],
-        [w.I32],
-      ),
+      w.CallIndirect(w.IndexInt("0"), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
       w.I32Const("1"),
       w.I32Const("2"),
     ],
@@ -383,9 +384,6 @@ pub fn select_test() {
 pub fn parse_module_test() {
   let assert Ok(w.Module(Some("$mod"), functions: [], ..)) =
     parse_module("(module $mod)")
-
-  let assert Ok(w.Module(functions: [w.Function(expr: [w.Unreachable], ..)], ..)) =
-    parse_module("(module (func unreachable))")
 }
 
 pub fn parse_module_global_test() {
@@ -432,6 +430,25 @@ pub fn parse_module_type_test() {
     ],
     ..,
   )) = parse_module("(type $s (struct (field $a i32) (field $b f32)))")
+}
+
+pub fn parse_module_func_implicit_type_test() {
+  let assert Ok(w.Module(
+    types: [
+      w.RecType([
+        w.TypeDef(
+          id: None,
+          sub: w.Final,
+          super: [],
+          def: w.Func([w.Param(None, w.I32)], [w.I32]),
+        ),
+      ]),
+    ],
+    functions: [
+      w.Function(type_: w.IndexImplicit(w.ImplicitFunc([w.I32], [w.I32])), ..),
+    ],
+    ..,
+  )) = parse_module("(func (param $a i32) (result i32))")
 }
 
 pub fn parse_module_memory_test() {
@@ -577,7 +594,7 @@ pub fn parse_module_function_inline_import_export_test() {
         module_name: "mod",
         import_name: "func",
         id: None,
-        type_: None,
+        type_: w.IndexImplicit(w.ImplicitFunc([], [])),
         params: [],
         results: [],
       ),
@@ -585,7 +602,7 @@ pub fn parse_module_function_inline_import_export_test() {
     functions: [
       w.Function(
         id: None,
-        type_: None,
+        type_: w.IndexImplicit(w.ImplicitFunc([], [w.I32])),
         params: [],
         results: [w.I32],
         locals: [],
@@ -659,7 +676,19 @@ pub fn parse_module_exports_test() {
 
 pub fn parse_module_tags_test() {
   let assert Ok(w.Module(
-    tags: [w.Tag(Some("$t"), None, [w.Param(None, w.I32)], [])],
+    types: [
+      w.RecType([
+        w.TypeDef(None, w.Final, [], w.Func([w.Param(None, w.I32)], [])),
+      ]),
+    ],
+    tags: [
+      w.Tag(
+        Some("$t"),
+        w.IndexImplicit(w.ImplicitFunc([w.I32], [])),
+        [w.Param(None, w.I32)],
+        [],
+      ),
+    ],
     ..,
   )) = parse_module("(tag $t (param i32))")
 }
@@ -687,6 +716,26 @@ pub fn resolve_func_ids_test() {
   )) = parse_and_resolve_module("(func $f (call $g)) (func $g (call $f))")
   let assert Error("function not found: $g") =
     parse_and_resolve_module("(func $f (call $g))")
+}
+
+pub fn parse_module_func_implicit_type_matches_existing_test() {
+  let assert Ok(w.Module(
+    types: [
+      w.RecType([
+        w.TypeDef(
+          id: None,
+          sub: w.Final,
+          super: [],
+          def: w.Func([w.Param(Some("$x"), w.I32)], [w.I32]),
+        ),
+      ]),
+    ],
+    functions: [w.Function(type_: w.IndexInt("0"), ..)],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(type (func (param $x i32) (result i32)))(func (param $a i32) (result i32))",
+    )
 }
 
 pub fn resolve_local_ids_test() {
@@ -739,6 +788,93 @@ pub fn resolve_struct_field_ids_test() {
     )
 }
 
+pub fn resolve_block_implicit_type_test() {
+  let assert Ok(w.Module(
+    types: [_, t1, t2],
+    functions: [
+      w.Function(
+        expr: [
+          w.Block(
+            Some("$b"),
+            w.BlockTypeUse(
+              w.IndexInt(idx),
+              [w.Param(Some("$a"), w.I32), w.Param(Some("$b"), w.I32)],
+              [w.F32],
+            ),
+          ),
+          w.End(None),
+        ],
+        ..,
+      ),
+    ],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(type (func (param i64))) (func (block $b (param $a i32) (param $b i32) (result f32)))",
+    )
+  case idx {
+    "1" -> {
+      assert w.func_type([], []) == t2
+      assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], [w.F32])
+        == t1
+    }
+    "2" -> {
+      assert w.func_type([], []) == t1
+      assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], [w.F32])
+        == t2
+    }
+    _ -> panic as { "invalid type index " <> idx }
+  }
+}
+
+pub fn resolve_nested_block_implicit_type_test() {
+  let assert Ok(w.Module(
+    types: [_, t1, t2],
+    functions: [
+      w.Function(
+        expr: [
+          w.Block(
+            Some("$b"),
+            w.BlockTypeUse(
+              w.IndexInt(idx0),
+              [w.Param(None, w.I32), w.Param(None, w.I32)],
+              [],
+            ),
+          ),
+          w.Loop(
+            Some("$l"),
+            w.BlockTypeUse(
+              w.IndexInt(idx1),
+              [w.Param(None, w.F32), w.Param(None, w.F32)],
+              [],
+            ),
+          ),
+          w.End(None),
+          w.End(None),
+        ],
+        ..,
+      ),
+    ],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(type (func (param i64) (result i64))) (func (type 0) (block $b (param i32 i32) (loop $l (param f32 f32))))",
+    )
+  case idx0 {
+    "1" -> {
+      assert idx1 == "2"
+      assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], []) == t1
+      assert w.func_type([w.Param(None, w.F32), w.Param(None, w.F32)], []) == t2
+    }
+    "2" -> {
+      assert idx1 == "1"
+      assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], []) == t2
+      assert w.func_type([w.Param(None, w.F32), w.Param(None, w.F32)], []) == t1
+    }
+    _ -> panic as { "invalid type index " <> idx0 }
+  }
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
@@ -761,7 +897,7 @@ fn parse_func(str) {
   |> result.map(fn(mod) {
     let assert w.Module(
       id: None,
-      types: [],
+      types: _,
       imports: [],
       tags: [],
       globals: [],
