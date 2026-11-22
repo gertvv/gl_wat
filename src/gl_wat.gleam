@@ -668,12 +668,13 @@ pub type IdContext {
     elements: Dict(String, Int),
     locals: Dict(String, Int),
     labels: List(String),
+    fields: Dict(#(Int, String), Int),
   )
 }
 
 fn empty_id_context() {
   let e = dict.new()
-  IdContext(e, e, e, e, e, e, e, e, e, [])
+  IdContext(e, e, e, e, e, e, e, e, e, [], dict.new())
 }
 
 type ParseContext {
@@ -779,7 +780,14 @@ fn update_context(ctx: ParseContext, decls: List(Decl)) -> ParseContext {
   list.fold(decls, ctx, fn(ctx, decl) {
     case decl {
       TypeDecl(rec_type) -> {
-        list.fold(rec_type.defs, ctx, fn(ctx, t) { new_type(ctx, t.id) })
+        list.fold(rec_type.defs, ctx, fn(ctx, t) {
+          let id = ctx.types
+          let ctx = new_type(ctx, t.id)
+          case t.def {
+            Struct(fields:) -> new_field(ctx, id, fields)
+            _ -> ctx
+          }
+        })
       }
       ImportDecl(value) ->
         case value {
@@ -876,6 +884,28 @@ fn new_element(ctx: ParseContext, id: Option(String)) -> ParseContext {
       elements: assign_id(ctx.ids.elements, id, ctx.elements),
     ),
   )
+}
+
+fn new_field(
+  ctx: ParseContext,
+  type_idx: Int,
+  fields: List(Field),
+) -> ParseContext {
+  list.index_map(fields, fn(field, idx) { #(idx, field) })
+  |> list.fold(ctx, fn(ctx, field) {
+    let #(field_idx, field) = field
+    case field.id {
+      Some(id) ->
+        ParseContext(
+          ..ctx,
+          ids: IdContext(
+            ..ctx.ids,
+            fields: dict.insert(ctx.ids.fields, #(type_idx, id), field_idx),
+          ),
+        )
+      None -> ctx
+    }
+  })
 }
 
 fn non_import(ctx: ParseContext) -> ParseContext {
@@ -1509,7 +1539,9 @@ fn comp_type_parser() -> nibble.Parser(CompType, Token, b) {
 
 fn def_struct_parser() -> nibble.Parser(CompType, Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("struct")))
-  use fields <- nibble.do(nibble.many(field_parser()))
+  use fields <- nibble.do(
+    nibble.many(field_parser()) |> nibble.map(list.flatten),
+  )
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(Struct(fields))
 }
@@ -1533,13 +1565,23 @@ fn def_func_parser() -> nibble.Parser(CompType, Token, b) {
   nibble.return(Func(params, results))
 }
 
-fn field_parser() -> nibble.Parser(Field, Token, b) {
-  // TODO: abbreviation for anonymous fields (multiple in one)
+fn field_parser() -> nibble.Parser(List(Field), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("field")))
-  use id <- nibble.do(id_parser() |> nibble.optional)
-  use ft <- nibble.do(field_type_parser())
+  use fields <- nibble.do(
+    nibble.one_of([
+      {
+        use id <- nibble.do(id_parser())
+        use ft <- nibble.do(field_type_parser())
+        nibble.return([Field(Some(id), ft)])
+      },
+      {
+        use fts <- nibble.do(nibble.many(field_type_parser()))
+        nibble.return(list.map(fts, Field(None, _)))
+      },
+    ]),
+  )
   use _ <- nibble.do(nibble.token(RParen))
-  nibble.return(Field(id, ft))
+  nibble.return(fields)
 }
 
 fn field_type_parser() -> nibble.Parser(FieldType, Token, b) {
@@ -2582,10 +2624,14 @@ fn resolve_ids_instr(
       result.map(resolve_type(type_index, ctx), StructNew)
     StructNewDefault(type_index:) ->
       result.map(resolve_type(type_index, ctx), StructNewDefault)
-    StructGet(type_index:, field_index:) -> todo
-    StructGetS(type_index:, field_index:) -> todo
-    StructGetU(type_index:, field_index:) -> todo
-    StructSet(type_index:, field_index:) -> todo
+    StructGet(type_index:, field_index:) ->
+      resolve_ids_field_access(type_index, field_index, ctx, StructGet)
+    StructGetS(type_index:, field_index:) ->
+      resolve_ids_field_access(type_index, field_index, ctx, StructGetS)
+    StructGetU(type_index:, field_index:) ->
+      resolve_ids_field_access(type_index, field_index, ctx, StructGetU)
+    StructSet(type_index:, field_index:) ->
+      resolve_ids_field_access(type_index, field_index, ctx, StructSet)
     ArrayNew(type_index:) -> result.map(resolve_type(type_index, ctx), ArrayNew)
     ArrayNewDefault(type_index:) ->
       result.map(resolve_type(type_index, ctx), ArrayNewDefault)
@@ -2818,6 +2864,17 @@ fn resolve_ids_instr(
   }
 }
 
+fn resolve_ids_field_access(
+  type_index: Index,
+  field_index: Index,
+  ctx: IdContext,
+  constr: fn(Index, Index) -> Instruction,
+) -> Result(Instruction, String) {
+  use type_index <- result.try(resolve_type(type_index, ctx))
+  use field_index <- result.map(resolve_field(type_index, field_index, ctx))
+  constr(type_index, field_index)
+}
+
 fn check_block_label(
   label: Option(String),
   ctx: IdContext,
@@ -2908,6 +2965,23 @@ fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Index, String) {
       |> result.map(pair.first)
       |> result.map(IndexInt)
       |> result.replace_error("label not found: " <> id)
+  }
+}
+
+fn resolve_field(
+  type_index: Index,
+  field_index: Index,
+  ctx: IdContext,
+) -> Result(Index, String) {
+  let assert IndexInt(type_index) = type_index
+  let assert Ok(type_index) = int.parse(type_index)
+  case field_index {
+    IndexInt(_) -> Ok(field_index)
+    IndexId(id) ->
+      case dict.get(ctx.fields, #(type_index, id)) {
+        Ok(index) -> Ok(IndexInt(int.to_string(index)))
+        Error(_) -> Error("field not found: " <> id)
+      }
   }
 }
 

@@ -727,6 +727,18 @@ pub fn resolve_branch_ids_test() {
     )
 }
 
+pub fn resolve_struct_field_ids_test() {
+  let assert Ok(w.Module(
+    functions: [
+      w.Function(expr: [w.StructGet(w.IndexInt("0"), w.IndexInt("2"))], ..),
+    ],
+    ..,
+  )) =
+    parse_and_resolve_module(
+      "(type (struct (field i32 i32) (field $c i32))) (func (struct.get 0 $c))",
+    )
+}
+
 fn assert_lex_self_as(l, input, fun) {
   let assert Ok([token]) = lexer.run(input, l)
   assert token.lexeme == input
