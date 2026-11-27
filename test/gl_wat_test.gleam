@@ -1,5 +1,7 @@
+import bigi
 import gl_wat as w
 import gleam/float
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/pair
@@ -209,7 +211,7 @@ pub fn parse_func_with_two_locals_test() {
 }
 
 pub fn parse_func_with_type_test() {
-  let assert Ok(w.Function(type_: w.IndexInt("3"), ..)) =
+  let assert Ok(w.Function(type_: w.IndexInt(3), ..)) =
     parse_func("(func (type 3))")
 
   let assert Ok(w.Function(type_: w.IndexId("$ft"), ..)) =
@@ -250,13 +252,7 @@ pub fn parse_func_instr_folded_arg_test() {
 
 pub fn parse_func_nested_folded_instr_test() {
   let assert Ok(w.Function(
-    expr: [
-      w.I32Const("2"),
-      w.I32Const("3"),
-      w.I32Mul,
-      w.I32Const("5"),
-      w.I32Add,
-    ],
+    expr: [w.I32Const(2), w.I32Const(3), w.I32Mul, w.I32Const(5), w.I32Add],
     ..,
   )) =
     parse_func(
@@ -312,14 +308,14 @@ pub fn parse_block_params_test() {
 
 pub fn parse_block_type_test() {
   let assert Ok(w.Function(
-    expr: [w.Block(None, w.BlockTypeUse(w.IndexInt("0"), [], [])), w.End(None)],
+    expr: [w.Block(None, w.BlockTypeUse(w.IndexInt(0), [], [])), w.End(None)],
     ..,
   )) = parse_func("(func (block (type 0)))")
 }
 
 pub fn parse_block_child_exprs_test() {
   let assert Ok(w.Function(
-    expr: [w.Block(None, w.BlockEmpty), w.I32Const("3"), w.Drop, w.End(None)],
+    expr: [w.Block(None, w.BlockEmpty), w.I32Const(3), w.Drop, w.End(None)],
     ..,
   )) = parse_func("(func (block (i32.const 3) drop))")
 }
@@ -328,7 +324,7 @@ pub fn parse_block_unfolded_test() {
   let assert Ok(w.Function(
     expr: [
       w.Block(None, w.BlockResult(w.I32)),
-      w.I32Const("3"),
+      w.I32Const(3),
       w.Drop,
       w.End(None),
     ],
@@ -339,11 +335,11 @@ pub fn parse_block_unfolded_test() {
 pub fn if_else_test() {
   let assert Ok(w.Function(
     expr: [
-      w.I32Const("0"),
+      w.I32Const(0),
       w.If(None, w.BlockResult(w.I32)),
-      w.I32Const("1"),
+      w.I32Const(1),
       w.Else(None),
-      w.I32Const("2"),
+      w.I32Const(2),
       w.End(None),
     ],
     ..,
@@ -364,9 +360,9 @@ pub fn if_else_flat_test() {
   let assert Ok(w.Function(
     expr: [
       w.If(Some("$a"), w.BlockResult(w.I32)),
-      w.I32Const("3"),
+      w.I32Const(3),
       w.Else(Some("$a")),
-      w.I32Const("4"),
+      w.I32Const(4),
       w.End(Some("$a")),
     ],
     ..,
@@ -380,9 +376,9 @@ pub fn br_on_cast_test() {
   let assert Ok(w.Function(
     expr: [
       w.BranchOnCast(
-        w.IndexInt("1"),
+        w.IndexInt(1),
         w.Nullable(w.HeapAny),
-        w.Nullable(w.HeapIndex(w.IndexInt("0"))),
+        w.Nullable(w.HeapIndex(w.IndexInt(0))),
       ),
     ],
     ..,
@@ -392,8 +388,8 @@ pub fn br_on_cast_test() {
 pub fn call_indirect_test() {
   let assert Ok(w.Function(
     expr: [
-      w.I32Const("0"),
-      w.CallIndirect(w.IndexInt("0"), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
+      w.I32Const(0),
+      w.CallIndirect(w.IndexInt(0), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
     ],
     ..,
   )) =
@@ -405,10 +401,10 @@ pub fn call_indirect_test() {
 pub fn flat_call_indirect_test() {
   let assert Ok(w.Function(
     expr: [
-      w.I32Const("0"),
-      w.CallIndirect(w.IndexInt("0"), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
-      w.I32Const("1"),
-      w.I32Const("2"),
+      w.I32Const(0),
+      w.CallIndirect(w.IndexInt(0), w.IndexId("$t"), [w.I32, w.I32], [w.I32]),
+      w.I32Const(1),
+      w.I32Const(2),
     ],
     ..,
   )) =
@@ -422,10 +418,8 @@ pub fn call_indirect_disallows_param_labels_test() {
 }
 
 pub fn select_test() {
-  let assert Ok(w.Function(
-    expr: [w.I32Const("5"), w.Select([w.I32, w.F64])],
-    ..,
-  )) = parse_func("(func (select (result i32) (result f64) (i32.const 5)))")
+  let assert Ok(w.Function(expr: [w.I32Const(5), w.Select([w.I32, w.F64])], ..)) =
+    parse_func("(func (select (result i32) (result f64) (i32.const 5)))")
 }
 
 pub fn parse_module_test() {
@@ -436,20 +430,21 @@ pub fn parse_module_test() {
 pub fn parse_module_global_test() {
   let assert Ok(w.Module(
     globals: [
-      w.Global(Some("$g"), w.Mutable, w.I32, [w.I32Const("1")]),
-      w.Global(None, w.Immutable, w.I64, [w.I64Const("3")]),
+      w.Global(Some("$g"), w.Mutable, w.I32, [w.I32Const(1)]),
+      w.Global(None, w.Immutable, w.I64, [w.I64Const(i64)]),
     ],
     ..,
   )) =
     parse_module(
       "(module (global $g (mut i32) (i32.const 1)) (global i64 i64.const 3))",
     )
+  assert bigi.from_int(3) == i64
 }
 
 pub fn parse_module_global_inline_import_export_test() {
   let assert Ok(w.Module(
     imports: [w.ImportGlobal("mod", "glob", None, w.Immutable, w.F64)],
-    exports: [w.ExportGlobal("ex", w.IndexInt("0"))],
+    exports: [w.ExportGlobal("ex", w.IndexInt(0))],
     ..,
   )) = parse_module("(global (export \"ex\") (import \"mod\" \"glob\") f64)")
 }
@@ -500,32 +495,39 @@ pub fn parse_module_func_implicit_type_test() {
 
 pub fn parse_module_memory_test() {
   let assert Ok(w.Module(
-    memories: [w.Memory(None, w.Address32, w.Limits("4", Some("16")))],
+    memories: [w.Memory(None, w.Address32, w.Limits(lo, Some(hi)))],
     ..,
   )) = parse_module("(memory 4 16)")
+  assert bigi.from_int(4) == lo
+  assert bigi.from_int(16) == hi
 }
 
 pub fn parse_module_memory_with_data_test() {
   let assert Ok(w.Module(
-    memories: [w.Memory(Some("$d"), w.Address32, w.Limits("1", Some("1")))],
+    memories: [w.Memory(Some("$d"), w.Address32, w.Limits(lo, Some(hi)))],
     datas: [
-      w.ActiveData(None, <<"hello there">>, w.IndexInt("0"), [w.I32Const("0")]),
+      w.ActiveData(None, <<"hello there">>, w.IndexInt(0), [w.I32Const(0)]),
     ],
     ..,
   )) = parse_module("(memory $d i32 (data \"hello there\"))")
+  assert lo == bigi.one()
+  assert hi == bigi.one()
 }
 
 pub fn parse_module_second_memory_with_data_test() {
   let assert Ok(w.Module(
     memories: [
-      w.Memory(None, w.Address64, w.Limits("4", None)),
-      w.Memory(Some("$d"), w.Address32, w.Limits("1", Some("1"))),
+      w.Memory(None, w.Address64, w.Limits(lo1, None)),
+      w.Memory(Some("$d"), w.Address32, w.Limits(lo2, Some(hi2))),
     ],
     datas: [
-      w.ActiveData(None, <<"hello there">>, w.IndexInt("1"), [w.I32Const("0")]),
+      w.ActiveData(None, <<"hello there">>, w.IndexInt(1), [w.I32Const(0)]),
     ],
     ..,
   )) = parse_module("(memory i64 4) (memory $d i32 (data \"hello there\"))")
+  assert lo1 == bigi.from_int(4)
+  assert lo2 == bigi.one()
+  assert hi2 == bigi.one()
 }
 
 pub fn parse_module_memory_inline_import_export_test() {
@@ -536,21 +538,24 @@ pub fn parse_module_memory_inline_import_export_test() {
         import_name: "imp",
         id: Some("$mem"),
         address_type: w.Address32,
-        limits: w.Limits("4", Some("16")),
+        limits: w.Limits(lo, Some(hi)),
       ),
     ],
-    exports: [w.ExportMemory(name: "exp", memory_index: w.IndexInt("0"))],
+    exports: [w.ExportMemory(name: "exp", memory_index: w.IndexInt(0))],
     ..,
   )) =
     parse_module("(memory $mem (export \"exp\") (import \"mod\" \"imp\") 4 16)")
+  assert lo == bigi.from_int(4)
+  assert hi == bigi.from_int(16)
 }
 
 pub fn parse_module_data_test() {
   let assert Ok(w.Module(
-    memories: [w.Memory(None, w.Address32, w.Limits("1", None))],
-    datas: [w.ActiveData(None, <<"data">>, w.IndexInt("0"), [w.I32Const("12")])],
+    memories: [w.Memory(None, w.Address32, w.Limits(lo, None))],
+    datas: [w.ActiveData(None, <<"data">>, w.IndexInt(0), [w.I32Const(12)])],
     ..,
   )) = parse_module("(memory 1) (data (memory 0) (i32.const 12) \"data\")")
+  assert lo == bigi.one()
 }
 
 pub fn parse_module_table_test() {
@@ -559,13 +564,14 @@ pub fn parse_module_table_test() {
       w.Table(
         Some("$t"),
         w.Address32,
-        w.Limits("8", None),
+        w.Limits(lo, None),
         w.Nullable(w.HeapAny),
         [w.RefNull(w.HeapAny)],
       ),
     ],
     ..,
   )) = parse_module("(table $t 8 anyref)")
+  assert lo == bigi.from_int(8)
 }
 
 pub fn parse_module_table_non_null_requires_initializer_test() {
@@ -580,13 +586,15 @@ pub fn parse_module_table_initializer_test() {
       w.Table(
         None,
         w.Address64,
-        w.Limits("8", Some("16")),
+        w.Limits(lo, Some(hi)),
         w.NonNull(w.HeapFunc),
         [w.RefFunc(w.IndexId("$f"))],
       ),
     ],
     ..,
   )) = parse_module("(table i64 8 16 (ref func) ref.func $f)")
+  assert lo == bigi.from_int(8)
+  assert hi == bigi.from_int(16)
 }
 
 pub fn parse_module_table_inline_elem_test() {
@@ -596,7 +604,7 @@ pub fn parse_module_table_inline_elem_test() {
       w.Table(
         None,
         w.Address32,
-        w.Limits("2", Some("2")),
+        w.Limits(lo, Some(hi)),
         w.Nullable(w.HeapFunc),
         [w.RefNull(w.HeapFunc)],
       ),
@@ -606,12 +614,14 @@ pub fn parse_module_table_inline_elem_test() {
         None,
         w.NonNull(w.HeapFunc),
         [[w.RefFunc(w.IndexId("$f"))], [w.RefFunc(w.IndexId("$g"))]],
-        w.IndexInt("1"),
-        [w.I32Const("0")],
+        w.IndexInt(1),
+        [w.I32Const(0)],
       ),
     ],
     ..,
   )) = parse_module("(table 8 anyref) (table funcref (elem func $f $g))")
+  assert lo == bigi.from_int(2)
+  assert hi == bigi.from_int(2)
 }
 
 pub fn parse_module_table_inline_import_export_test() {
@@ -622,16 +632,18 @@ pub fn parse_module_table_inline_import_export_test() {
         import_name: "imp",
         id: Some("$tbl"),
         address_type: w.Address32,
-        limits: w.Limits("4", Some("16")),
+        limits: w.Limits(lo, Some(hi)),
         ref_type: w.Nullable(w.HeapFunc),
       ),
     ],
-    exports: [w.ExportTable(name: "exp", table_index: w.IndexInt("0"))],
+    exports: [w.ExportTable(name: "exp", table_index: w.IndexInt(0))],
     ..,
   )) =
     parse_module(
       "(table $tbl (export \"exp\") (import \"mod\" \"imp\") 4 16 funcref)",
     )
+  assert lo == bigi.from_int(4)
+  assert hi == bigi.from_int(16)
 }
 
 pub fn parse_module_function_inline_import_export_test() {
@@ -653,12 +665,12 @@ pub fn parse_module_function_inline_import_export_test() {
         params: [],
         results: [w.I32],
         locals: [],
-        expr: [w.I32Const("0")],
+        expr: [w.I32Const(0)],
       ),
     ],
     exports: [
-      w.ExportFunction(name: "a", function_index: w.IndexInt("0")),
-      w.ExportFunction(name: "b", function_index: w.IndexInt("1")),
+      w.ExportFunction(name: "a", function_index: w.IndexInt(0)),
+      w.ExportFunction(name: "b", function_index: w.IndexInt(1)),
     ],
     ..,
   )) =
@@ -690,12 +702,12 @@ pub fn parse_module_legacy_active_element_test() {
         id: None,
         ref_type: w.NonNull(w.HeapFunc),
         elems: [
-          [w.RefFunc(w.IndexInt("0"))],
-          [w.RefFunc(w.IndexInt("1"))],
-          [w.RefFunc(w.IndexInt("2"))],
+          [w.RefFunc(w.IndexInt(0))],
+          [w.RefFunc(w.IndexInt(1))],
+          [w.RefFunc(w.IndexInt(2))],
         ],
-        table_index: w.IndexInt("0"),
-        offset: [w.I32Const("8")],
+        table_index: w.IndexInt(0),
+        offset: [w.I32Const(8)],
       ),
     ],
     ..,
@@ -714,7 +726,7 @@ pub fn parse_module_start_function_test() {
 pub fn parse_module_exports_test() {
   let assert Ok(w.Module(
     exports: [
-      w.ExportMemory("mem", w.IndexInt("0")),
+      w.ExportMemory("mem", w.IndexInt(0)),
       w.ExportFunction("fn", w.IndexId("$f")),
     ],
     ..,
@@ -756,8 +768,8 @@ pub fn no_imports_after_non_import_declarations_test() {
 pub fn resolve_func_ids_test() {
   let assert Ok(w.Module(
     functions: [
-      w.Function(id: Some("$f"), expr: [w.Call(w.IndexInt("1"))], ..),
-      w.Function(id: Some("$g"), expr: [w.Call(w.IndexInt("0"))], ..),
+      w.Function(id: Some("$f"), expr: [w.Call(w.IndexInt(1))], ..),
+      w.Function(id: Some("$g"), expr: [w.Call(w.IndexInt(0))], ..),
     ],
     ..,
   )) = parse_and_resolve_module("(func $f (call $g)) (func $g (call $f))")
@@ -777,7 +789,7 @@ pub fn parse_module_func_implicit_type_matches_existing_test() {
         ),
       ]),
     ],
-    functions: [w.Function(type_: w.IndexInt("0"), ..)],
+    functions: [w.Function(type_: w.IndexInt(0), ..)],
     ..,
   )) =
     parse_and_resolve_module(
@@ -789,7 +801,7 @@ pub fn resolve_local_ids_test() {
   let assert Ok(w.Module(
     functions: [
       w.Function(
-        expr: [w.LocalGet(w.IndexInt("0")), w.LocalSet(w.IndexInt("1"))],
+        expr: [w.LocalGet(w.IndexInt(0)), w.LocalSet(w.IndexInt(1))],
         ..,
       ),
     ],
@@ -807,10 +819,10 @@ pub fn resolve_branch_ids_test() {
         expr: [
           w.Loop(Some("$outer"), w.BlockEmpty),
           w.Block(Some("$inner"), w.BlockEmpty),
-          w.Branch(w.IndexInt("1")),
-          w.Branch(w.IndexInt("0")),
+          w.Branch(w.IndexInt(1)),
+          w.Branch(w.IndexInt(0)),
           w.End(None),
-          w.Branch(w.IndexInt("0")),
+          w.Branch(w.IndexInt(0)),
           w.End(None),
         ],
         ..,
@@ -826,7 +838,7 @@ pub fn resolve_branch_ids_test() {
 pub fn resolve_struct_field_ids_test() {
   let assert Ok(w.Module(
     functions: [
-      w.Function(expr: [w.StructGet(w.IndexInt("0"), w.IndexInt("2"))], ..),
+      w.Function(expr: [w.StructGet(w.IndexInt(0), w.IndexInt(2))], ..),
     ],
     ..,
   )) =
@@ -860,17 +872,17 @@ pub fn resolve_block_implicit_type_test() {
       "(type (func (param i64))) (func (block $b (param $a i32) (param $b i32) (result f32)))",
     )
   case idx {
-    "1" -> {
+    1 -> {
       assert w.func_type([], []) == t2
       assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], [w.F32])
         == t1
     }
-    "2" -> {
+    2 -> {
       assert w.func_type([], []) == t1
       assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], [w.F32])
         == t2
     }
-    _ -> panic as { "invalid type index " <> idx }
+    _ -> panic as { "invalid type index " <> int.to_string(idx) }
   }
 }
 
@@ -908,17 +920,17 @@ pub fn resolve_nested_block_implicit_type_test() {
       "(type (func (param i64) (result i64))) (func (type 0) (block $b (param i32 i32) (loop $l (param f32 f32))))",
     )
   case idx0 {
-    "1" -> {
-      assert idx1 == "2"
+    1 -> {
+      assert idx1 == 2
       assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], []) == t1
       assert w.func_type([w.Param(None, w.F32), w.Param(None, w.F32)], []) == t2
     }
-    "2" -> {
-      assert idx1 == "1"
+    2 -> {
+      assert idx1 == 1
       assert w.func_type([w.Param(None, w.I32), w.Param(None, w.I32)], []) == t2
       assert w.func_type([w.Param(None, w.F32), w.Param(None, w.F32)], []) == t1
     }
-    _ -> panic as { "invalid type index " <> idx0 }
+    _ -> panic as { "invalid type index " <> int.to_string(idx0) }
   }
 }
 

@@ -1,3 +1,4 @@
+import bigi.{type BigInt}
 import gleam/bit_array
 import gleam/bool
 import gleam/dict.{type Dict}
@@ -409,7 +410,7 @@ pub type Instruction {
   StructSet(type_index: Index, field_index: Index)
   ArrayNew(type_index: Index)
   ArrayNewDefault(type_index: Index)
-  ArrayNewFixed(type_index: Index, size: String)
+  ArrayNewFixed(type_index: Index, size: Int)
   ArrayNewData(type_index: Index, data_index: Index)
   ArrayNewElem(type_index: Index, element_index: Index)
   ArrayGet(type_index: Index)
@@ -479,8 +480,8 @@ pub type Instruction {
   DataDrop(data_index: Index)
   //
   // Numeric instructions
-  I32Const(value: String)
-  I64Const(value: String)
+  I32Const(value: Int)
+  I64Const(value: BigInt)
   F32Const(value: IEEEFloat)
   F64Const(value: IEEEFloat)
   I32EqZ
@@ -601,7 +602,7 @@ fn implicit_func(params: List(Param), results: List(ValueType)) {
 }
 
 pub type Index {
-  IndexInt(String)
+  IndexInt(Int)
   IndexId(String)
   IndexImplicit(ImplicitFunc)
 }
@@ -653,7 +654,7 @@ pub type AddressType {
 }
 
 pub type Limits {
-  Limits(min: String, max: Option(String))
+  Limits(min: BigInt, max: Option(BigInt))
 }
 
 pub type Data {
@@ -1315,7 +1316,7 @@ fn element_parser(ctx: ParseContext) {
       ))
       use _ <- nibble.do(nibble.token(RParen))
       // abbreviation: 𝜖 -> (table 0)
-      let table_index = option.unwrap(table_index, IndexInt("0"))
+      let table_index = option.unwrap(table_index, IndexInt(0))
       nibble.return(
         ParseReturn(list.append(impl1, impl2), [
           ElementDecl(ActiveElement(
@@ -1334,9 +1335,7 @@ fn element_parser(ctx: ParseContext) {
 fn inline_exports_parser(new_index: Int, constr) {
   nibble.many(
     inline_export_parser()
-    |> nibble.map(fn(name) {
-      ExportDecl(constr(name, IndexInt(int.to_string(new_index))))
-    }),
+    |> nibble.map(fn(name) { ExportDecl(constr(name, IndexInt(new_index))) }),
   )
 }
 
@@ -1376,7 +1375,7 @@ fn table_parser(ctx: ParseContext) {
             False,
             ctx,
           ))
-          let n = list.length(elems) |> int.to_string
+          let n = list.length(elems) |> bigi.from_int
           let limits = Limits(n, Some(n))
           use expr <- nibble.do(case ref_type {
             Nullable(ht) -> nibble.return([RefNull(ht)])
@@ -1384,10 +1383,7 @@ fn table_parser(ctx: ParseContext) {
               nibble.fail("elem initialization expression for non-null reftype")
           })
           let offset = [
-            case address_type {
-              Address32 -> I32Const("0")
-              Address64 -> I64Const("0")
-            },
+            zero_address(address_type),
           ]
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
@@ -1398,7 +1394,7 @@ fn table_parser(ctx: ParseContext) {
                 id: None,
                 ref_type: elem_ref_type,
                 elems:,
-                table_index: IndexInt(int.to_string(ctx.tables)),
+                table_index: IndexInt(ctx.tables),
                 offset:,
               )),
               ..exports
@@ -1429,6 +1425,13 @@ fn table_parser(ctx: ParseContext) {
       ])
     },
   ])
+}
+
+fn zero_address(address_type: AddressType) -> Instruction {
+  case address_type {
+    Address32 -> I32Const(0)
+    Address64 -> I64Const(bigi.zero())
+  }
 }
 
 fn table_type_parser() -> nibble.Parser(
@@ -1516,7 +1519,7 @@ fn data_parser(ctx: ParseContext) {
       use memory_index <- nibble.do(nibble.or(
         use_parser("memory"),
         // abbreviation: 𝜖 -> (memory 0)
-        IndexInt("0"),
+        IndexInt(0),
       ))
       use ExprReturn(impl:, instr: offset) <- nibble.do(offset_parser(ctx))
       use data <- nibble.do(string_bytes_parser())
@@ -1585,7 +1588,7 @@ fn memory_parser(ctx: ParseContext) {
           let n = bit_array.byte_size(data)
           let n =
             { { n + page_size - 1 } / page_size }
-            |> int.to_string
+            |> bigi.from_int
           use _ <- nibble.do(nibble.token(RParen))
           use _ <- nibble.do(nibble.token(RParen))
           nibble.return(
@@ -1595,9 +1598,9 @@ fn memory_parser(ctx: ParseContext) {
                 ActiveData(
                   id: None,
                   data:,
-                  memory_index: IndexInt(ctx.memories |> int.to_string),
+                  memory_index: IndexInt(ctx.memories),
                   offset: [
-                    I32Const("0"),
+                    zero_address(address_type),
                   ],
                 ),
               ),
@@ -1629,8 +1632,8 @@ fn memory_type_parser() -> nibble.Parser(#(AddressType, Limits), Token, b) {
 }
 
 fn limits_parser() -> nibble.Parser(Limits, Token, b) {
-  use min <- nibble.do(int_parser())
-  use max <- nibble.do(int_parser() |> nibble.optional)
+  use min <- nibble.do(int64_parser())
+  use max <- nibble.do(int64_parser() |> nibble.optional)
   nibble.return(Limits(min:, max:))
 }
 
@@ -2027,28 +2030,28 @@ fn basic_instr_parser(
     "global.set" -> one_arg_parser(index_parser(), GlobalSet) |> m
     // table instructions
     "table.get" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGet) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), TableGet) |> m
     "table.set" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSet) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), TableSet) |> m
     "table.size" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableSize) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), TableSize) |> m
     "table.grow" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), TableGrow) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), TableGrow) |> m
     "table.copy" ->
       nibble.one_of([
         two_arg_parser(index_parser(), index_parser(), TableCopy) |> m,
-        r(TableCopy(IndexInt("0"), IndexInt("0"))),
+        r(TableCopy(IndexInt(0), IndexInt(0))),
       ])
     "table.init" -> {
       use idx1 <- nibble.do(index_parser())
       use idx2 <- nibble.do(index_parser() |> nibble.optional)
       case idx2 {
         Some(idx2) -> r(TableInit(idx1, idx2))
-        None -> r(TableInit(IndexInt("0"), idx1))
+        None -> r(TableInit(IndexInt(0), idx1))
       }
     }
     "elem.drop" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), ElemDrop) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), ElemDrop) |> m
     // memory instructions
     "i32.load" -> mem_instr_parser(I32Load) |> m
     "i64.load" -> mem_instr_parser(I64Load) |> m
@@ -2076,11 +2079,11 @@ fn basic_instr_parser(
     "i64.store32" -> mem_instr_parser(I64Store32) |> m
     // TODO: vector store instructions
     "memory.size" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemorySize) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), MemorySize) |> m
     "memory.grow" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryGrow) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), MemoryGrow) |> m
     "memory.fill" ->
-      one_arg_parser_optional(index_parser(), IndexInt("0"), MemoryFill) |> m
+      one_arg_parser_optional(index_parser(), IndexInt(0), MemoryFill) |> m
     "memory.copy" -> todo as "two optional index args"
     "memory.init" -> todo as "memory index optional, data index required"
     "data.drop" -> one_arg_parser(index_parser(), DataDrop) |> m
@@ -2110,7 +2113,7 @@ fn basic_instr_parser(
     "array.new" -> one_arg_parser(index_parser(), ArrayNew) |> m
     "array.new_default" -> one_arg_parser(index_parser(), ArrayNewDefault) |> m
     "array.new_fixed" ->
-      two_arg_parser(index_parser(), int_parser(), ArrayNewFixed) |> m
+      two_arg_parser(index_parser(), int32_parser(), ArrayNewFixed) |> m
     "array.new_data" ->
       two_arg_parser(index_parser(), index_parser(), ArrayNewData) |> m
     "array.new_elem" ->
@@ -2130,8 +2133,8 @@ fn basic_instr_parser(
     "any.convert_extern" -> r(AnyConvertExtern)
     "extern.convert_any" -> r(ExternConvertAny)
     // numeric instructions
-    "i32.const" -> one_arg_parser(int_parser(), I32Const) |> m
-    "i64.const" -> one_arg_parser(int_parser(), I64Const) |> m
+    "i32.const" -> one_arg_parser(int32_parser(), I32Const) |> m
+    "i64.const" -> one_arg_parser(int64_parser(), I64Const) |> m
     "f32.const" -> one_arg_parser(float_parser(), F32Const) |> m
     "f64.const" -> one_arg_parser(float_parser(), F64Const) |> m
     "i32.eqz" -> r(I32EqZ)
@@ -2273,7 +2276,7 @@ fn basic_instr_parser(
 
 fn call_indirect_parser(constr) {
   use table_index <- nibble.do(index_parser() |> nibble.optional)
-  let table_index = option.unwrap(table_index, IndexInt("0"))
+  let table_index = option.unwrap(table_index, IndexInt(0))
   use type_ <- nibble.do(nibble.optional(func_type_parser()))
   use params <- nibble.do(
     nibble.many(result_like_parser("param")) |> nibble.map(list.flatten),
@@ -2357,7 +2360,7 @@ fn mem_instr_parser(
   constr: fn(Index, String, String) -> Instruction,
 ) -> nibble.Parser(List(Instruction), Token, a) {
   use idx <- nibble.do(nibble.optional(index_parser()))
-  let idx = option.unwrap(idx, IndexInt("0"))
+  let idx = option.unwrap(idx, IndexInt(0))
   use offset <- nibble.do(
     nibble.optional({
       use t <- nibble.do(nibble.any())
@@ -2407,7 +2410,7 @@ fn one_arg_parser_optional(arg1, def1, constr) {
 
 fn index_parser() {
   nibble.one_of([
-    int_parser() |> nibble.map(IndexInt),
+    int32_parser() |> nibble.map(IndexInt),
     id_parser() |> nibble.map(IndexId),
   ])
 }
@@ -2417,6 +2420,32 @@ fn func_type_parser() -> nibble.Parser(Index, Token, a) {
   use type_use <- nibble.do(index_parser())
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(type_use)
+}
+
+fn int32_parser() -> nibble.Parser(Int, Token, a) {
+  use str <- nibble.do(int_parser())
+  let res = case string.replace(str, "_", "") {
+    "-0x" <> hex -> int.base_parse("-" <> hex, 16)
+    "+0x" <> hex | "0x" <> hex -> int.base_parse(hex, 16)
+    _ -> int.parse(str)
+  }
+  case res {
+    Ok(i) -> nibble.return(i)
+    Error(_) -> nibble.fail("Invalid i32: " <> str)
+  }
+}
+
+fn int64_parser() -> nibble.Parser(BigInt, Token, a) {
+  use str <- nibble.do(int_parser())
+  let res = case string.replace(str, "_", "") {
+    "-0x" <> hex -> bigi.from_base16("-" <> hex)
+    "+0x" <> hex | "0x" <> hex -> bigi.from_base16(hex)
+    _ -> bigi.from_string(str)
+  }
+  case res {
+    Ok(i) -> nibble.return(i)
+    Error(_) -> nibble.fail("Invalid i64: " <> str)
+  }
 }
 
 fn int_parser() -> nibble.Parser(String, Token, a) {
@@ -3225,7 +3254,7 @@ fn resolve_type(type_index: Index, ctx: IdContext) -> Result(Index, String) {
     IndexId(_) -> resolve_id(type_index, ctx.types, "type")
     IndexImplicit(i) ->
       dict.get(ctx.func_types, i)
-      |> result.map(fn(i) { IndexInt(int.to_string(i)) })
+      |> result.map(fn(i) { IndexInt(i) })
       |> result.replace_error("missing implicit func type")
   }
 }
@@ -3278,7 +3307,7 @@ fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Index, String) {
   case label_index {
     IndexInt(_) -> Ok(label_index)
     IndexId(id) ->
-      list.index_map(ctx.labels, fn(l, i) { #(int.to_string(i), l) })
+      list.index_map(ctx.labels, fn(l, i) { #(i, l) })
       |> list.find(fn(p) { pair.second(p) == id })
       |> result.map(pair.first)
       |> result.map(IndexInt)
@@ -3293,12 +3322,11 @@ fn resolve_field(
   ctx: IdContext,
 ) -> Result(Index, String) {
   let assert IndexInt(type_index) = type_index
-  let assert Ok(type_index) = int.parse(type_index)
   case field_index {
     IndexInt(_) -> Ok(field_index)
     IndexId(id) ->
       case dict.get(ctx.fields, #(type_index, id)) {
-        Ok(index) -> Ok(IndexInt(int.to_string(index)))
+        Ok(index) -> Ok(IndexInt(index))
         Error(_) -> Error("field not found: " <> id)
       }
     IndexImplicit(_) -> panic
@@ -3314,7 +3342,7 @@ fn resolve_id(
     IndexInt(_) -> Ok(index)
     IndexId(id) ->
       case dict.get(ids, id) {
-        Ok(index) -> Ok(IndexInt(int.to_string(index)))
+        Ok(index) -> Ok(IndexInt(index))
         Error(_) -> Error(where <> " not found: " <> id)
       }
     IndexImplicit(_) -> panic as { "implicit index for " <> where }

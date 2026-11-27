@@ -17,6 +17,7 @@ gleam_stdlib = ">= 0.34.0 and < 2.0.0"
 nibble = { git = "https://github.com/sisou/nibble.git", ref = "sisou/stdlib-update" }
 gleam_regexp = ">= 1.1.1 and < 2.0.0"
 ieee_float = ">= 2.0.2 and < 3.0.0"
+bigi = ">= 4.1.1 and < 5.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
