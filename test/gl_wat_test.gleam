@@ -1,10 +1,12 @@
 import gl_wat as w
+import gleam/float
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/pair
 import gleam/result
 import gleam/string
 import gleeunit
+import ieee_float
 import nibble
 import nibble/lexer
 
@@ -58,6 +60,51 @@ pub fn float_lexer_test() {
   assert expected == actual
   let assert Error(_) = lexer.run("0x0.eP", l)
   let assert Error(_) = lexer.run(".3e3", l)
+}
+
+pub fn parse_hexfloat_test() {
+  let fstr = fn(str) {
+    w.parse_hexfloat(str) |> result.map(ieee_float.to_string)
+  }
+  let assert Ok("1.0") = fstr("0x1p0")
+  let assert Ok("1.0") = fstr("0x1.")
+  let assert Ok("0.5") = fstr("0x.8")
+  let assert Ok("0.001953125") = fstr("0x.008")
+  // Examples from https://gcc.gnu.org/onlinedocs/gcc/Hex-Floats.html
+  let assert Ok("1.9375") = fstr("0x1.f")
+  let assert Ok("15.5") = fstr("0x1.fp3")
+  let assert Ok("-1.9375") = fstr("-0x1fp-4")
+  // Examples from https://github.com/dankogai/js-hexfloat/
+  let assert Ok(pos_e) = fstr("0x1.5bf0a8b145769p+1")
+  assert float.to_string(float.exponential(1.0)) == pos_e
+  let assert Ok(neg_e) = fstr("-0xa.df85458a2bb4a9bp-2")
+  assert float.to_string(0.0 -. float.exponential(1.0)) == neg_e
+  let assert Ok(pos_pi) = fstr("0x1.921fb54442d18p+1")
+  assert float.to_string(3.141592653589793) == pos_pi
+  let assert Ok(neg_pi) = fstr("-0xc.90fdaa22168c235p-2")
+  assert float.to_string(-3.141592653589793) == neg_pi
+  let assert Ok(dead_beef) = fstr("0xDEAD.BEEFP0")
+  assert float.to_string(57_005.7458343505859375) == dead_beef
+  let assert Ok(act_small) = fstr("0x1p-42")
+  let assert Ok(exp_small) =
+    float.power(2.0, -42.0) |> result.map(float.to_string)
+  assert exp_small == act_small
+  let assert Ok(act_min_val) = fstr("0x1p-1074")
+  let assert Ok(exp_min_val) =
+    float.power(2.0, -1074.0) |> result.map(float.to_string)
+  assert act_min_val == exp_min_val
+  let assert Ok(act_max_val) = fstr("0x1.fffffffffffffp+1023")
+  assert act_max_val == "1.7976931348623157e308"
+  let assert Ok("0.0") = fstr("+0x0p+0")
+  let assert Ok("-0.0") = fstr("-0x0p+0")
+  // Error cases
+  let assert Error("Invalid hexfloat: 0x1_000.0") =
+    w.parse_hexfloat("0x1_000.0")
+  let assert Error("Invalid hexfloat: 0.0") = w.parse_hexfloat("0.0")
+  let assert Error("Invalid hexfloat: 0x0G") = w.parse_hexfloat("0x0G")
+  let assert Error("Invalid hexfloat: 0x1p2f") = w.parse_hexfloat("0x1p2f")
+  let assert Error("Too small: 0x1p-1075") = w.parse_hexfloat("0x1p-1075")
+  let assert Error("Too large: 0x1p1024") = w.parse_hexfloat("0x1p1024")
 }
 
 pub fn str_lexer_test() {

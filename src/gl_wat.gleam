@@ -8,6 +8,7 @@ import gleam/pair
 import gleam/regexp.{type Regexp}
 import gleam/result
 import gleam/string
+import ieee_float.{type IEEEFloat}
 import nibble
 import nibble/lexer
 
@@ -52,7 +53,7 @@ pub fn lexer() {
       <> "(\\.("
       <> hexnum
       <> ")?)?([Pp][+-]?"
-      <> hexnum
+      <> decnum
       <> ")?$",
     )
   let assert Ok(nanfloat_re) =
@@ -80,6 +81,112 @@ pub fn lexer() {
     // TODO: the spec's definition of whitespace
     lexer.whitespace(Nil) |> lexer.ignore(),
   ])
+}
+
+/// Parse a WebAssembly Text float representation
+pub fn parse_float(str: String) -> Result(IEEEFloat, String) {
+  case str {
+    "+inf" | "inf" -> Ok(ieee_float.positive_infinity())
+    "-inf" -> Ok(ieee_float.negative_infinity())
+    "+nan" | "nan" -> Ok(ieee_float.nan())
+    "-nan" -> Ok(ieee_float.nan() |> ieee_float.negate())
+    "+nan:" <> _val | "-nan:" <> _val | "nan:" <> _val ->
+      Error("Non-canonical NaN not supported")
+    "+0x" <> _ | "0x" <> _ | "-0x" <> _ ->
+      parse_hexfloat(string.replace(str, "_", ""))
+    str -> {
+      let f = ieee_float.parse(string.replace(str, "_", ""))
+      case ieee_float.is_nan(f) {
+        True -> Error("Invalid float value: " <> str)
+        False -> Ok(f)
+      }
+    }
+  }
+}
+
+pub fn parse_hexfloat(str: String) -> Result(IEEEFloat, String) {
+  let err = fn() { "Invalid hexfloat: " <> str }
+  // detect the sign (0 = positive, 1 = negative)
+  use #(sign, hex) <- result.try(case str {
+    "+0x" <> hex | "0x" <> hex -> Ok(#(0, hex))
+    "-0x" <> hex -> Ok(#(1, hex))
+    _ -> Error(err())
+  })
+  // separate mantissa and exponent
+  let #(mant, exp) =
+    string.split_once(hex, "p")
+    |> result.or(string.split_once(hex, "P"))
+    |> result.unwrap(#(hex, "0"))
+  // separate whole and fractional parts
+  let #(whole, frac) =
+    string.split_once(mant, ".") |> result.unwrap(#(mant, ""))
+  let frac_digits = string.length(frac)
+  let mant = whole <> frac
+  // pad to an even number of digits for base16_decode, which expects whole bytes
+  let mant = case int.is_odd(string.length(mant)) {
+    True -> "0" <> mant
+    False -> mant
+  }
+  // convert hex to binary
+  use mant <- result.try(
+    bit_array.base16_decode(mant) |> result.replace_error(err()),
+  )
+  // the exponent is a decimal integer
+  use exp <- result.try(int.parse(exp) |> result.replace_error(err()))
+  // count fractional digits into the exponent (each hex digit is 4 bits)
+  let exp = exp - 4 * frac_digits
+  let msb = msb(mant)
+  // early return for zero
+  use <- bool.guard(
+    msb == -1,
+    Ok(ieee_float.from_bytes_64_be(<<sign:size(1), 0:size(63)>>)),
+  )
+  // the actual exponent increases by the number of significant bits
+  let exp = exp + msb
+  use <- bool.guard(exp < -1074, Error("Too small: " <> str))
+  use <- bool.guard(exp > 1023, Error("Too large: " <> str))
+  // drop the leading zeros
+  let lead = bit_array.bit_size(mant) - { msb + 1 }
+  let assert <<_:size(lead), mant:bits>> = mant
+  // add bias to exponent
+  let exp = exp + 1023
+  let #(mant, exp) = case exp <= 0 {
+    True -> {
+      // subnormal - add the needed number of leading zeros
+      let mant = <<0:size(-exp), mant:bits>>
+      #(mant, 0)
+    }
+    False -> {
+      // normal - drop the leading one
+      let assert <<1:size(1), mant:bits>> = mant
+      #(mant, exp)
+    }
+  }
+  // add trailing zeros if needed and drop least significant bits beyond 52
+  let tail = 52 - bit_array.bit_size(mant)
+  let mant = case tail >= 0 {
+    True -> {
+      <<mant:bits, 0:size(tail)>>
+    }
+    False -> {
+      let assert <<mant:bits-size(52), _:bits>> = mant
+      mant
+    }
+  }
+  Ok(ieee_float.from_bytes_64_be(<<sign:size(1), exp:size(11), mant:bits>>))
+}
+
+/// Returns the index of the most significant bit, counted from the end
+fn msb(mant: BitArray) -> Int {
+  find_msb(mant, bit_array.bit_size(mant) - 1)
+}
+
+fn find_msb(mant: BitArray, idx: Int) -> Int {
+  case mant {
+    <<1:size(1), _:bits>> -> idx
+    <<_:size(1), r:bits>> -> find_msb(r, idx - 1)
+    _ -> -1
+  }
 }
 
 // lexes the content of a string
@@ -374,8 +481,8 @@ pub type Instruction {
   // Numeric instructions
   I32Const(value: String)
   I64Const(value: String)
-  F32Const(value: String)
-  F64Const(value: String)
+  F32Const(value: IEEEFloat)
+  F64Const(value: IEEEFloat)
   I32EqZ
   I32Eq
   I32NE
@@ -2320,10 +2427,14 @@ fn int_parser() -> nibble.Parser(String, Token, a) {
   }
 }
 
-fn float_parser() -> nibble.Parser(String, Token, a) {
+fn float_parser() -> nibble.Parser(IEEEFloat, Token, a) {
   use t <- nibble.do(nibble.any())
   case t {
-    Float(str) -> nibble.return(str)
+    Float(str) ->
+      case parse_float(str) {
+        Ok(val) -> nibble.return(val)
+        Error(err) -> nibble.fail(err)
+      }
     _ -> nibble.fail("expected a float")
   }
 }
