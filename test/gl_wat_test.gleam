@@ -71,6 +71,7 @@ pub fn parse_hexfloat_test() {
   let assert Ok("1.0") = fstr("0x1p0")
   let assert Ok("1.0") = fstr("0x1.")
   let assert Ok("0.5") = fstr("0x.8")
+  let assert Ok("2.0") = fstr("0x.8p2")
   let assert Ok("0.001953125") = fstr("0x.008")
   // Examples from https://gcc.gnu.org/onlinedocs/gcc/Hex-Floats.html
   let assert Ok("1.9375") = fstr("0x1.f")
@@ -978,9 +979,8 @@ fn parse_module(str: String) {
   nibble.run(tokens, w.module_parser()) |> result.map(pair.first)
 }
 
-fn parse_and_resolve_module(str: String) {
-  let assert Ok(tokens) = lexer.run(str, w.lexer())
-  let tokens = w.simplify(tokens)
+fn parse_and_resolve_module(src: String) {
+  let assert Ok(tokens) = lexer.run(src, w.lexer()) |> result.map(w.simplify)
   let assert Ok(#(mod, ctx)) = nibble.run(tokens, w.module_parser())
   w.resolve_indices(mod, ctx)
 }

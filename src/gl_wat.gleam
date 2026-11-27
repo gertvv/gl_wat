@@ -85,7 +85,7 @@ pub fn lexer() {
 }
 
 /// Parse a WebAssembly Text float representation
-pub fn parse_float(str: String) -> Result(IEEEFloat, String) {
+fn parse_float(str: String) -> Result(IEEEFloat, String) {
   case str {
     "+inf" | "inf" -> Ok(ieee_float.positive_infinity())
     "-inf" -> Ok(ieee_float.negative_infinity())
@@ -105,6 +105,7 @@ pub fn parse_float(str: String) -> Result(IEEEFloat, String) {
   }
 }
 
+/// Parse a C99-style hexadecimal float: `0x0.8b2 -> 2.0`.
 pub fn parse_hexfloat(str: String) -> Result(IEEEFloat, String) {
   let err = fn() { "Invalid hexfloat: " <> str }
   // detect the sign (0 = positive, 1 = negative)
@@ -190,8 +191,8 @@ fn find_msb(mant: BitArray, idx: Int) -> Int {
   }
 }
 
-// lexes the content of a string
-pub fn string_lexer() {
+/// Lexes the content of a string
+fn string_lexer() {
   let assert Ok(ucp_re) =
     regexp.from_string("\\\\u{x[0-9A-Fa-f](_?[0-9A-Fa-f])*}")
   let assert Ok(hex_re) = regexp.from_string("\\\\([0-9A-Fa-f]{2})")
@@ -251,6 +252,7 @@ fn separated_token(
   })
 }
 
+/// Simplifies the output of the lexer for use by the parser.
 pub fn simplify(tokens: List(lexer.Token(Token))) -> List(lexer.Token(Token)) {
   list.fold(tokens, [], fn(acc, token) {
     case acc, token {
@@ -771,7 +773,7 @@ pub type Module {
   )
 }
 
-pub type IdContext {
+pub opaque type IdContext {
   IdContext(
     types: Dict(String, Int),
     tags: Dict(String, Int),
@@ -943,10 +945,11 @@ fn update_context(
               _ -> ctx
             }
           })
+        // if a singular, final function type is registered, track this to later
+        // resolve implicit references via function type uses.
         case rec_type {
-          // TODO: any conditions on super?
           RecType(defs: [
-            TypeDef(sub: Final, super:, def: Func(params:, results:), ..),
+            TypeDef(sub: Final, super: [], def: Func(params:, results:), ..),
           ]) -> {
             let params = list.map(params, fn(param) { param.typ })
             case dict.get(ctx.ids.func_types, ImplicitFunc(params, results)) {
@@ -2578,6 +2581,7 @@ fn keyword_value_parser(
   nibble.return(value)
 }
 
+/// Replace all occurrences of `IndexId` and `IndexImplicit` by `IndexInt`.
 pub fn resolve_indices(mod: Module, ctx: IdContext) -> Result(Module, String) {
   use types <- result.try(
     list.try_map(mod.types, fn(rec) {

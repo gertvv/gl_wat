@@ -3,14 +3,24 @@
 [![Package Version](https://img.shields.io/hexpm/v/gl_wat)](https://hex.pm/packages/gl_wat)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/gl_wat/)
 
-```sh
-gleam add gl_wat@1
-```
 ```gleam
-import gl_wat
+import gl_wat as w
+import gleam/result
+import nibble
+import nibble/lexer
 
 pub fn main() {
-  // TODO: An example of the project in use
+  let src =
+    "(func (export \"add\") (param i32 i32) (result i32) "
+    <> "(i32.add (local.get 0) (local.get 1)))"
+  // produce tokens for the parser
+  let assert Ok(tokens) = lexer.run(src, w.lexer()) |> result.map(w.simplify)
+  // run the parser itself
+  let assert Ok(#(mod, ctx)) = nibble.run(tokens, w.module_parser())
+  // resolve any cross-references to their respective indices
+  let assert Ok(mod) = w.resolve_indices(mod, ctx)
+  // go wild!
+  echo mod
 }
 ```
 
@@ -19,13 +29,13 @@ Further documentation can be found at <https://hexdocs.pm/gl_wat>.
 ## Development
 
 ```sh
-gleam run   # Run the project
+gleam dev   # Run the above example
 gleam test  # Run the tests
 ```
 
 ## Status
 
-The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-17-wasm-3.0/) text format specification.
+The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-17-wasm-3.0/) text format specification. SIMD/Vector support is a low priority.
 
 - [ ] Lexical format
   - [x] Keyword tokens
