@@ -90,7 +90,7 @@ fn parse_float(str: String) -> Result(IEEEFloat, String) {
     "+inf" | "inf" -> Ok(ieee_float.positive_infinity())
     "-inf" -> Ok(ieee_float.negative_infinity())
     "+nan" | "nan" -> Ok(ieee_float.nan())
-    "-nan" -> Ok(ieee_float.nan() |> ieee_float.negate())
+    "-nan" -> Error("Negative NaN not supported")
     "+nan:" <> _val | "-nan:" <> _val | "nan:" <> _val ->
       Error("Non-canonical NaN not supported")
     "+0x" <> _ | "0x" <> _ | "-0x" <> _ ->

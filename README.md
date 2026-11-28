@@ -50,7 +50,7 @@ The goal is to support the full [WASM 3.0](https://webassembly.org/news/2025-09-
   - [ ] Annotations
 - [ ] Values
   - [x] Integer
-  - [x] Float
+  - [x] Float (except: negative and non-canonical NaN)
   - [x] String
   - [ ] Names
   - [ ] Identifiers
