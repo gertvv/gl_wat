@@ -769,8 +769,8 @@ pub fn no_imports_after_non_import_declarations_test() {
 pub fn resolve_func_ids_test() {
   let assert Ok(w.Module(
     functions: [
-      w.Function(id: Some("$f"), expr: [w.Call(w.IndexInt(1))], ..),
-      w.Function(id: Some("$g"), expr: [w.Call(w.IndexInt(0))], ..),
+      w.Function(id: Some("$f"), expr: [w.Call(1)], ..),
+      w.Function(id: Some("$g"), expr: [w.Call(0)], ..),
     ],
     ..,
   )) = parse_and_resolve_module("(func $f (call $g)) (func $g (call $f))")
@@ -790,7 +790,7 @@ pub fn parse_module_func_implicit_type_matches_existing_test() {
         ),
       ]),
     ],
-    functions: [w.Function(type_: w.IndexInt(0), ..)],
+    functions: [w.Function(type_: 0, ..)],
     ..,
   )) =
     parse_and_resolve_module(
@@ -800,12 +800,7 @@ pub fn parse_module_func_implicit_type_matches_existing_test() {
 
 pub fn resolve_local_ids_test() {
   let assert Ok(w.Module(
-    functions: [
-      w.Function(
-        expr: [w.LocalGet(w.IndexInt(0)), w.LocalSet(w.IndexInt(1))],
-        ..,
-      ),
-    ],
+    functions: [w.Function(expr: [w.LocalGet(0), w.LocalSet(1)], ..)],
     ..,
   )) =
     parse_and_resolve_module(
@@ -820,10 +815,10 @@ pub fn resolve_branch_ids_test() {
         expr: [
           w.Loop(Some("$outer"), w.BlockEmpty),
           w.Block(Some("$inner"), w.BlockEmpty),
-          w.Branch(w.IndexInt(1)),
-          w.Branch(w.IndexInt(0)),
+          w.Branch(1),
+          w.Branch(0),
           w.End(None),
-          w.Branch(w.IndexInt(0)),
+          w.Branch(0),
           w.End(None),
         ],
         ..,
@@ -838,9 +833,7 @@ pub fn resolve_branch_ids_test() {
 
 pub fn resolve_struct_field_ids_test() {
   let assert Ok(w.Module(
-    functions: [
-      w.Function(expr: [w.StructGet(w.IndexInt(0), w.IndexInt(2))], ..),
-    ],
+    functions: [w.Function(expr: [w.StructGet(0, 2)], ..)],
     ..,
   )) =
     parse_and_resolve_module(
@@ -857,7 +850,7 @@ pub fn resolve_block_implicit_type_test() {
           w.Block(
             Some("$b"),
             w.BlockTypeUse(
-              w.IndexInt(idx),
+              idx,
               [w.Param(Some("$a"), w.I32), w.Param(Some("$b"), w.I32)],
               [w.F32],
             ),
@@ -896,7 +889,7 @@ pub fn resolve_nested_block_implicit_type_test() {
           w.Block(
             Some("$b"),
             w.BlockTypeUse(
-              w.IndexInt(idx0),
+              idx0,
               [w.Param(None, w.I32), w.Param(None, w.I32)],
               [],
             ),
@@ -904,7 +897,7 @@ pub fn resolve_nested_block_implicit_type_test() {
           w.Loop(
             Some("$l"),
             w.BlockTypeUse(
-              w.IndexInt(idx1),
+              idx1,
               [w.Param(None, w.F32), w.Param(None, w.F32)],
               [],
             ),

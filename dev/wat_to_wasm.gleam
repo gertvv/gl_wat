@@ -5,7 +5,7 @@ import gleam/option.{type Option, None}
 import gleam/pair
 import gleam/result
 
-pub fn compile_module(mod: t.Module) -> Result(w.ModuleBuilder, String) {
+pub fn compile_module(mod: t.Module(Int)) -> Result(w.ModuleBuilder, String) {
   let mb = w.create_module_builder(mod.id)
   // register types
   use mb <- result.try(
@@ -27,20 +27,20 @@ pub fn compile_module(mod: t.Module) -> Result(w.ModuleBuilder, String) {
   Ok(mb)
 }
 
-fn map_export(export: t.Export) -> w.Export {
+fn map_export(export: t.Export(Int)) -> w.Export {
   case export {
     t.ExportTag(name:, tag_index:) -> todo
     t.ExportGlobal(name:, global_index:) -> todo
     t.ExportMemory(name:, memory_index:) -> todo
     t.ExportTable(name:, table_index:) -> todo
     t.ExportFunction(name:, function_index:) ->
-      w.ExportFunction(name, index(function_index))
+      w.ExportFunction(name, function_index)
   }
 }
 
 fn compile_function(
   mb: w.ModuleBuilder,
-  func: #(t.Function, w.CodeBuilder),
+  func: #(t.Function(Int), w.CodeBuilder),
 ) -> Result(w.ModuleBuilder, String) {
   let #(func, fb) = func
   use fb <- result.try(
@@ -57,7 +57,7 @@ fn compile_function(
   w.finalize_function(mb, fb)
 }
 
-fn map_instruction(instr: t.Instruction) -> w.Instruction {
+fn map_instruction(instr: t.Instruction(Int)) -> w.Instruction {
   case instr {
     t.Unreachable -> todo
     t.Nop -> todo
@@ -114,7 +114,7 @@ fn map_instruction(instr: t.Instruction) -> w.Instruction {
     t.ExternConvertAny -> todo
     t.Drop -> todo
     t.Select(value_types) -> todo
-    t.LocalGet(local_index:) -> w.LocalGet(index(local_index))
+    t.LocalGet(local_index:) -> w.LocalGet(local_index)
     t.LocalSet(local_index:) -> todo
     t.LocalTee(local_index:) -> todo
     t.GlobalGet(global_index:) -> todo
@@ -266,32 +266,25 @@ fn map_instruction(instr: t.Instruction) -> w.Instruction {
   }
 }
 
-fn map_function_signature(f: t.Function) -> w.FunctionSignature {
-  w.FunctionSignature(type_index: index(f.type_), name: f.id, param_names: None)
+fn map_function_signature(f: t.Function(Int)) -> w.FunctionSignature {
+  w.FunctionSignature(type_index: f.type_, name: f.id, param_names: None)
 }
 
-fn map_rec_type(rec_type: t.RecType) -> List(w.SubType) {
+fn map_rec_type(rec_type: t.RecType(Int)) -> List(w.SubType) {
   list.map(rec_type.defs, map_sub_type)
 }
 
-fn map_sub_type(def: t.TypeDef) -> w.SubType {
+fn map_sub_type(def: t.TypeDef(Int)) -> w.SubType {
   case def.sub {
-    t.Open ->
-      w.SubOpen(list.map(def.super, index), map_composite_type(def.def, def.id))
-    t.Final ->
-      w.SubFinal(
-        list.map(def.super, index),
-        map_composite_type(def.def, def.id),
-      )
+    t.Open -> w.SubOpen(def.super, map_composite_type(def.def, def.id))
+    t.Final -> w.SubFinal(def.super, map_composite_type(def.def, def.id))
   }
 }
 
-fn index(index: t.Index) -> Int {
-  let assert t.IndexInt(i) = index
-  i
-}
-
-fn map_composite_type(def: t.CompType, id: Option(String)) -> w.CompositeType {
+fn map_composite_type(
+  def: t.CompType(Int),
+  id: Option(String),
+) -> w.CompositeType {
   case def {
     t.Struct(fields:) -> todo
     t.Array(item_type:) -> todo
@@ -300,11 +293,11 @@ fn map_composite_type(def: t.CompType, id: Option(String)) -> w.CompositeType {
   }
 }
 
-fn map_param(p: t.Param) -> w.ValueType {
+fn map_param(p: t.Param(Int)) -> w.ValueType {
   map_value_type(p.typ)
 }
 
-fn map_value_type(vt: t.ValueType) -> w.ValueType {
+fn map_value_type(vt: t.ValueType(Int)) -> w.ValueType {
   case vt {
     t.I32 -> w.I32
     t.I64 -> w.I64
@@ -314,14 +307,14 @@ fn map_value_type(vt: t.ValueType) -> w.ValueType {
   }
 }
 
-fn map_ref_type(rt: t.RefType) -> w.RefType {
+fn map_ref_type(rt: t.RefType(Int)) -> w.RefType {
   case rt {
     t.NonNull(ht) -> w.NonNull(map_heap_type(ht))
     t.Nullable(ht) -> w.Nullable(map_heap_type(ht))
   }
 }
 
-fn map_heap_type(ht: t.HeapType) -> w.HeapType {
+fn map_heap_type(ht: t.HeapType(Int)) -> w.HeapType {
   case ht {
     t.HeapAny -> w.AbstractAny
     t.HeapEq -> w.AbstractEq
@@ -335,6 +328,6 @@ fn map_heap_type(ht: t.HeapType) -> w.HeapType {
     t.HeapNoExn -> todo
     t.HeapExtern -> w.AbstractExtern
     t.HeapNoExtern -> w.AbstractNoExtern
-    t.HeapIndex(i) -> w.ConcreteType(index(i))
+    t.HeapIndex(i) -> w.ConcreteType(i)
   }
 }

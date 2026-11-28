@@ -265,15 +265,15 @@ pub fn simplify(tokens: List(lexer.Token(Token))) -> List(lexer.Token(Token)) {
   |> list.reverse
 }
 
-pub type ValueType {
+pub type ValueType(i) {
   I32
   I64
   F32
   F64
-  Ref(RefType)
+  Ref(RefType(i))
 }
 
-pub type HeapType {
+pub type HeapType(i) {
   HeapAny
   HeapEq
   HeapI31
@@ -286,41 +286,41 @@ pub type HeapType {
   HeapNoExn
   HeapExtern
   HeapNoExtern
-  HeapIndex(Index)
+  HeapIndex(i)
 }
 
-pub type RefType {
-  NonNull(heap_type: HeapType)
-  Nullable(heap_type: HeapType)
+pub type RefType(i) {
+  NonNull(heap_type: HeapType(i))
+  Nullable(heap_type: HeapType(i))
 }
 
-pub type Param {
-  Param(id: Option(String), typ: ValueType)
+pub type Param(i) {
+  Param(id: Option(String), typ: ValueType(i))
 }
 
-pub type Function {
+pub type Function(i) {
   Function(
     id: Option(String),
-    type_: Index,
-    params: List(Param),
-    results: List(ValueType),
-    locals: List(Param),
-    expr: List(Instruction),
+    type_: i,
+    params: List(Param(i)),
+    results: List(ValueType(i)),
+    locals: List(Param(i)),
+    expr: List(Instruction(i)),
   )
 }
 
-pub type BlockType {
-  BlockTypeUse(type_: Index, params: List(Param), results: List(ValueType))
-  BlockResult(ValueType)
+pub type BlockType(i) {
+  BlockTypeUse(type_: i, params: List(Param(i)), results: List(ValueType(i)))
+  BlockResult(ValueType(i))
   BlockEmpty
 }
 
-pub type RecType {
-  RecType(defs: List(TypeDef))
+pub type RecType(i) {
+  RecType(defs: List(TypeDef(i)))
 }
 
-pub type TypeDef {
-  TypeDef(id: Option(String), sub: SubType, super: List(Index), def: CompType)
+pub type TypeDef(i) {
+  TypeDef(id: Option(String), sub: SubType, super: List(i), def: CompType(i))
 }
 
 pub type SubType {
@@ -328,22 +328,25 @@ pub type SubType {
   Final
 }
 
-pub type CompType {
-  Struct(fields: List(Field))
-  Array(item_type: FieldType)
-  Func(params: List(Param), results: List(ValueType))
+pub type CompType(i) {
+  Struct(fields: List(Field(i)))
+  Array(item_type: FieldType(i))
+  Func(params: List(Param(i)), results: List(ValueType(i)))
 }
 
-pub fn func_type(params: List(Param), results: List(ValueType)) -> RecType {
+pub fn func_type(
+  params: List(Param(i)),
+  results: List(ValueType(i)),
+) -> RecType(i) {
   RecType([TypeDef(None, Final, [], Func(params, results))])
 }
 
-pub type Field {
-  Field(id: Option(String), field_type: FieldType)
+pub type Field(i) {
+  Field(id: Option(String), field_type: FieldType(i))
 }
 
-pub type FieldType {
-  ValueField(mutability: Mutability, value_type: ValueType)
+pub type FieldType(i) {
+  ValueField(mutability: Mutability, value_type: ValueType(i))
   PackedField(mutability: Mutability, packed_type: PackedType)
 }
 
@@ -352,134 +355,138 @@ pub type PackedType {
   I16
 }
 
-pub type Instruction {
+pub type Instruction(i) {
   // Control instructions
   Unreachable
   Nop
-  Block(label: Option(String), block_type: BlockType)
-  Loop(label: Option(String), block_type: BlockType)
-  If(label: Option(String), block_type: BlockType)
+  Block(label: Option(String), block_type: BlockType(i))
+  Loop(label: Option(String), block_type: BlockType(i))
+  If(label: Option(String), block_type: BlockType(i))
   Else(label: Option(String))
   End(label: Option(String))
   // TODO: exceptions
-  Branch(label_index: Index)
-  BranchIf(label_index: Index)
-  BranchTable(label_indices: List(Index), default_label_index: Index)
+  Branch(label_index: i)
+  BranchIf(label_index: i)
+  BranchTable(label_indices: List(i), default_label_index: i)
   Return
-  Call(function_index: Index)
+  Call(function_index: i)
   CallIndirect(
-    table_index: Index,
-    type_: Index,
-    params: List(ValueType),
-    results: List(ValueType),
+    table_index: i,
+    type_: i,
+    params: List(ValueType(i)),
+    results: List(ValueType(i)),
   )
-  ReturnCall(function_index: Index)
+  ReturnCall(function_index: i)
   ReturnCallIndirect(
-    table_index: Index,
-    type_: Index,
-    params: List(ValueType),
-    results: List(ValueType),
+    table_index: i,
+    type_: i,
+    params: List(ValueType(i)),
+    results: List(ValueType(i)),
   )
-  CallRef(type_index: Index)
-  ReturnCallRef(type_index: Index)
-  BranchOnNull(label_index: Index)
-  BranchOnNonNull(label_index: Index)
-  BranchOnCast(label_index: Index, from_ref_type: RefType, to_ref_type: RefType)
+  CallRef(type_index: i)
+  ReturnCallRef(type_index: i)
+  BranchOnNull(label_index: i)
+  BranchOnNonNull(label_index: i)
+  BranchOnCast(
+    label_index: i,
+    from_ref_type: RefType(i),
+    to_ref_type: RefType(i),
+  )
   BranchOnCastFail(
-    label_index: Index,
-    from_ref_type: RefType,
-    to_ref_type: RefType,
+    label_index: i,
+    from_ref_type: RefType(i),
+    to_ref_type: RefType(i),
   )
   //
   // Reference instructions
-  RefNull(heap_type: HeapType)
-  RefFunc(function_index: Index)
+  RefNull(heap_type: HeapType(i))
+  RefFunc(function_index: i)
   RefIsNull
   RefAsNonNull
   RefEq
-  RefTest(ref_type: RefType)
-  RefCast(ref_type: RefType)
+  RefTest(ref_type: RefType(i))
+  RefCast(ref_type: RefType(i))
   //
   // Aggregate instructions
   RefI31
   I31GetS
   I31GetU
-  StructNew(type_index: Index)
-  StructNewDefault(type_index: Index)
-  StructGet(type_index: Index, field_index: Index)
-  StructGetS(type_index: Index, field_index: Index)
-  StructGetU(type_index: Index, field_index: Index)
-  StructSet(type_index: Index, field_index: Index)
-  ArrayNew(type_index: Index)
-  ArrayNewDefault(type_index: Index)
-  ArrayNewFixed(type_index: Index, size: Int)
-  ArrayNewData(type_index: Index, data_index: Index)
-  ArrayNewElem(type_index: Index, element_index: Index)
-  ArrayGet(type_index: Index)
-  ArrayGetS(type_index: Index)
-  ArrayGetU(type_index: Index)
-  ArraySet(type_index: Index)
+  StructNew(type_index: i)
+  StructNewDefault(type_index: i)
+  StructGet(type_index: i, field_index: i)
+  StructGetS(type_index: i, field_index: i)
+  StructGetU(type_index: i, field_index: i)
+  StructSet(type_index: i, field_index: i)
+  ArrayNew(type_index: i)
+  ArrayNewDefault(type_index: i)
+  ArrayNewFixed(type_index: i, size: Int)
+  ArrayNewData(type_index: i, data_index: i)
+  ArrayNewElem(type_index: i, element_index: i)
+  ArrayGet(type_index: i)
+  ArrayGetS(type_index: i)
+  ArrayGetU(type_index: i)
+  ArraySet(type_index: i)
   ArrayLen
-  ArrayFill(type_index: Index)
-  ArrayCopy(type_index: Index, source_type_index: Index)
-  ArrayInitData(type_index: Index, data_index: Index)
-  ArrayInitElem(type_index: Index, element_index: Index)
+  ArrayFill(type_index: i)
+  ArrayCopy(type_index: i, source_type_index: i)
+  ArrayInitData(type_index: i, data_index: i)
+  ArrayInitElem(type_index: i, element_index: i)
   AnyConvertExtern
   ExternConvertAny
   //
   // Parametric instructions
   Drop
-  Select(List(ValueType))
+  Select(List(ValueType(i)))
   //
   // Variable instructions
-  LocalGet(local_index: Index)
-  LocalSet(local_index: Index)
-  LocalTee(local_index: Index)
-  GlobalGet(global_index: Index)
-  GlobalSet(global_index: Index)
+  LocalGet(local_index: i)
+  LocalSet(local_index: i)
+  LocalTee(local_index: i)
+  GlobalGet(global_index: i)
+  GlobalSet(global_index: i)
   //
   // Table instructions
-  TableGet(table_index: Index)
-  TableSet(table_index: Index)
-  TableSize(table_index: Index)
-  TableGrow(table_index: Index)
-  TableFill(table_index: Index)
-  TableCopy(table_index: Index, source_table_index: Index)
-  TableInit(table_index: Index, element_index: Index)
-  ElemDrop(element_index: Index)
+  TableGet(table_index: i)
+  TableSet(table_index: i)
+  TableSize(table_index: i)
+  TableGrow(table_index: i)
+  TableFill(table_index: i)
+  TableCopy(table_index: i, source_table_index: i)
+  TableInit(table_index: i, element_index: i)
+  ElemDrop(element_index: i)
   //
   // Memory instructions
-  I32Load(memory_index: Index, offset: String, align: String)
-  I64Load(memory_index: Index, offset: String, align: String)
-  F32Load(memory_index: Index, offset: String, align: String)
-  F64Load(memory_index: Index, offset: String, align: String)
-  I32Load8S(memory_index: Index, offset: String, align: String)
-  I32Load8U(memory_index: Index, offset: String, align: String)
-  I32Load16S(memory_index: Index, offset: String, align: String)
-  I32Load16U(memory_index: Index, offset: String, align: String)
-  I64Load8S(memory_index: Index, offset: String, align: String)
-  I64Load8U(memory_index: Index, offset: String, align: String)
-  I64Load16S(memory_index: Index, offset: String, align: String)
-  I64Load16U(memory_index: Index, offset: String, align: String)
-  I64Load32S(memory_index: Index, offset: String, align: String)
-  I64Load32U(memory_index: Index, offset: String, align: String)
+  I32Load(memory_index: i, offset: String, align: String)
+  I64Load(memory_index: i, offset: String, align: String)
+  F32Load(memory_index: i, offset: String, align: String)
+  F64Load(memory_index: i, offset: String, align: String)
+  I32Load8S(memory_index: i, offset: String, align: String)
+  I32Load8U(memory_index: i, offset: String, align: String)
+  I32Load16S(memory_index: i, offset: String, align: String)
+  I32Load16U(memory_index: i, offset: String, align: String)
+  I64Load8S(memory_index: i, offset: String, align: String)
+  I64Load8U(memory_index: i, offset: String, align: String)
+  I64Load16S(memory_index: i, offset: String, align: String)
+  I64Load16U(memory_index: i, offset: String, align: String)
+  I64Load32S(memory_index: i, offset: String, align: String)
+  I64Load32U(memory_index: i, offset: String, align: String)
   // TODO: vector load instructions
-  I32Store(memory_index: Index, offset: String, align: String)
-  I64Store(memory_index: Index, offset: String, align: String)
-  F32Store(memory_index: Index, offset: String, align: String)
-  F64Store(memory_index: Index, offset: String, align: String)
-  I32Store8(memory_index: Index, offset: String, align: String)
-  I32Store16(memory_index: Index, offset: String, align: String)
-  I64Store8(memory_index: Index, offset: String, align: String)
-  I64Store16(memory_index: Index, offset: String, align: String)
-  I64Store32(memory_index: Index, offset: String, align: String)
+  I32Store(memory_index: i, offset: String, align: String)
+  I64Store(memory_index: i, offset: String, align: String)
+  F32Store(memory_index: i, offset: String, align: String)
+  F64Store(memory_index: i, offset: String, align: String)
+  I32Store8(memory_index: i, offset: String, align: String)
+  I32Store16(memory_index: i, offset: String, align: String)
+  I64Store8(memory_index: i, offset: String, align: String)
+  I64Store16(memory_index: i, offset: String, align: String)
+  I64Store32(memory_index: i, offset: String, align: String)
   // TODO: vector store instructions
-  MemorySize(memory_index: Index)
-  MemoryGrow(memory_index: Index)
-  MemoryFill(memory_index: Index)
-  MemoryCopy(memory_index: Index)
-  MemoryInit(memory_index: Index, data_index: Index)
-  DataDrop(data_index: Index)
+  MemorySize(memory_index: i)
+  MemoryGrow(memory_index: i)
+  MemoryFill(memory_index: i)
+  MemoryCopy(memory_index: i)
+  MemoryInit(memory_index: i, data_index: i)
+  DataDrop(data_index: i)
   //
   // Numeric instructions
   I32Const(value: Int)
@@ -596,10 +603,10 @@ pub type Instruction {
 }
 
 pub type ImplicitFunc {
-  ImplicitFunc(params: List(ValueType), results: List(ValueType))
+  ImplicitFunc(params: List(ValueType(Index)), results: List(ValueType(Index)))
 }
 
-fn implicit_func(params: List(Param), results: List(ValueType)) {
+fn implicit_func(params: List(Param(Index)), results: List(ValueType(Index))) {
   ImplicitFunc(list.map(params, fn(param) { param.typ }), results)
 }
 
@@ -609,25 +616,25 @@ pub type Index {
   IndexImplicit(ImplicitFunc)
 }
 
-type TypeUse {
-  TypeUse(type_: Index, params: List(Param), results: List(ValueType))
+type TypeUse(i) {
+  TypeUse(type_: i, params: List(Param(i)), results: List(ValueType(i)))
 }
 
-pub type Tag {
+pub type Tag(i) {
   Tag(
     id: Option(String),
-    type_: Index,
-    params: List(Param),
-    results: List(ValueType),
+    type_: i,
+    params: List(Param(i)),
+    results: List(ValueType(i)),
   )
 }
 
-pub type Global {
+pub type Global(i) {
   Global(
     id: Option(String),
     mutability: Mutability,
-    value_type: ValueType,
-    expr: List(Instruction),
+    value_type: ValueType(i),
+    expr: List(Instruction(i)),
   )
 }
 
@@ -640,13 +647,13 @@ pub type Memory {
   Memory(id: Option(String), address_type: AddressType, limits: Limits)
 }
 
-pub type Table {
+pub type Table(i) {
   Table(
     id: Option(String),
     address_type: AddressType,
     limits: Limits,
-    ref_type: RefType,
-    expr: List(Instruction),
+    ref_type: RefType(i),
+    expr: List(Instruction(i)),
   )
 }
 
@@ -659,55 +666,55 @@ pub type Limits {
   Limits(min: BigInt, max: Option(BigInt))
 }
 
-pub type Data {
+pub type Data(i) {
   PassiveData(id: Option(String), data: BitArray)
   ActiveData(
     id: Option(String),
     data: BitArray,
-    memory_index: Index,
-    offset: List(Instruction),
+    memory_index: i,
+    offset: List(Instruction(i)),
   )
 }
 
-pub type Element {
+pub type Element(i) {
   PassiveElement(
     id: Option(String),
-    ref_type: RefType,
-    elems: List(List(Instruction)),
+    ref_type: RefType(i),
+    elems: List(List(Instruction(i))),
   )
   ActiveElement(
     id: Option(String),
-    ref_type: RefType,
-    elems: List(List(Instruction)),
-    table_index: Index,
-    offset: List(Instruction),
+    ref_type: RefType(i),
+    elems: List(List(Instruction(i))),
+    table_index: i,
+    offset: List(Instruction(i)),
   )
   DeclarativeElement(
     id: Option(String),
-    ref_type: RefType,
-    elems: List(List(Instruction)),
+    ref_type: RefType(i),
+    elems: List(List(Instruction(i))),
   )
 }
 
-pub type Start {
-  Start(function_index: Index)
+pub type Start(i) {
+  Start(function_index: i)
 }
 
-pub type Import {
+pub type Import(i) {
   ImportTag(
     module_name: String,
     import_name: String,
     id: Option(String),
-    type_: Index,
-    params: List(Param),
-    results: List(ValueType),
+    type_: i,
+    params: List(Param(i)),
+    results: List(ValueType(i)),
   )
   ImportGlobal(
     module_name: String,
     import_name: String,
     id: Option(String),
     mutability: Mutability,
-    value_type: ValueType,
+    value_type: ValueType(i),
   )
   ImportMemory(
     module_name: String,
@@ -722,54 +729,54 @@ pub type Import {
     id: Option(String),
     address_type: AddressType,
     limits: Limits,
-    ref_type: RefType,
+    ref_type: RefType(i),
   )
   ImportFunction(
     module_name: String,
     import_name: String,
     id: Option(String),
-    type_: Index,
-    params: List(Param),
-    results: List(ValueType),
+    type_: i,
+    params: List(Param(i)),
+    results: List(ValueType(i)),
   )
 }
 
-pub type Export {
-  ExportTag(name: String, tag_index: Index)
-  ExportGlobal(name: String, global_index: Index)
-  ExportMemory(name: String, memory_index: Index)
-  ExportTable(name: String, table_index: Index)
-  ExportFunction(name: String, function_index: Index)
+pub type Export(i) {
+  ExportTag(name: String, tag_index: i)
+  ExportGlobal(name: String, global_index: i)
+  ExportMemory(name: String, memory_index: i)
+  ExportTable(name: String, table_index: i)
+  ExportFunction(name: String, function_index: i)
 }
 
 pub type Decl {
-  TypeDecl(RecType)
-  ImportDecl(Import)
-  TagDecl(Tag)
-  GlobalDecl(Global)
+  TypeDecl(RecType(Index))
+  ImportDecl(Import(Index))
+  TagDecl(Tag(Index))
+  GlobalDecl(Global(Index))
   MemoryDecl(Memory)
-  TableDecl(Table)
-  FunctionDecl(Function)
-  DataDecl(Data)
-  ElementDecl(Element)
-  StartDecl(Start)
-  ExportDecl(Export)
+  TableDecl(Table(Index))
+  FunctionDecl(Function(Index))
+  DataDecl(Data(Index))
+  ElementDecl(Element(Index))
+  StartDecl(Start(Index))
+  ExportDecl(Export(Index))
 }
 
-pub type Module {
+pub type Module(i) {
   Module(
     id: Option(String),
-    types: List(RecType),
-    imports: List(Import),
-    tags: List(Tag),
-    globals: List(Global),
+    types: List(RecType(i)),
+    imports: List(Import(i)),
+    tags: List(Tag(i)),
+    globals: List(Global(i)),
     memories: List(Memory),
-    tables: List(Table),
-    functions: List(Function),
-    datas: List(Data),
-    elements: List(Element),
-    start: Option(Start),
-    exports: List(Export),
+    tables: List(Table(i)),
+    functions: List(Function(i)),
+    datas: List(Data(i)),
+    elements: List(Element(i)),
+    start: Option(Start(i)),
+    exports: List(Export(i)),
   )
 }
 
@@ -817,7 +824,7 @@ type ParseReturn {
 }
 
 type ExprReturn {
-  ExprReturn(impl: List(ImplicitFunc), instr: List(Instruction))
+  ExprReturn(impl: List(ImplicitFunc), instr: List(Instruction(Index)))
 }
 
 fn ret_one(decl: Decl) {
@@ -1071,7 +1078,7 @@ fn new_element(ctx: ParseContext, id: Option(String)) -> ParseContext {
 fn new_field(
   ctx: ParseContext,
   type_idx: Int,
-  fields: List(Field),
+  fields: List(Field(Index)),
 ) -> ParseContext {
   list.index_map(fields, fn(field, idx) { #(idx, field) })
   |> list.fold(ctx, fn(ctx, field) {
@@ -1430,7 +1437,7 @@ fn table_parser(ctx: ParseContext) {
   ])
 }
 
-fn zero_address(address_type: AddressType) -> Instruction {
+fn zero_address(address_type: AddressType) -> Instruction(i) {
   case address_type {
     Address32 -> I32Const(0)
     Address64 -> I64Const(bigi.zero())
@@ -1438,7 +1445,7 @@ fn zero_address(address_type: AddressType) -> Instruction {
 }
 
 fn table_type_parser() -> nibble.Parser(
-  #(AddressType, Limits, RefType),
+  #(AddressType, Limits, RefType(Index)),
   Token,
   b,
 ) {
@@ -1452,7 +1459,7 @@ fn elem_list_parser(
   omit_func: Bool,
   ctx: ParseContext,
 ) -> nibble.Parser(
-  #(RefType, List(ImplicitFunc), List(List(Instruction))),
+  #(RefType(Index), List(ImplicitFunc), List(List(Instruction(Index)))),
   Token,
   b,
 ) {
@@ -1736,7 +1743,11 @@ fn global_parser(ctx: ParseContext) {
   ])
 }
 
-fn global_type_parser() -> nibble.Parser(#(Mutability, ValueType), Token, b) {
+fn global_type_parser() -> nibble.Parser(
+  #(Mutability, ValueType(Index)),
+  Token,
+  b,
+) {
   nibble.one_of([
     {
       use _ <- nibble.do(nibble.token(LKeyword("mut")))
@@ -1764,7 +1775,7 @@ fn rec_type_parser() {
   |> nibble.map(fn(t) { TypeDecl(RecType(t)) |> ret_one })
 }
 
-fn type_def_parser() -> nibble.Parser(TypeDef, Token, b) {
+fn type_def_parser() -> nibble.Parser(TypeDef(Index), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("type")))
   use id <- nibble.do(id_parser() |> nibble.optional)
   use #(sub, super, def) <- nibble.do(sub_type_parser())
@@ -1773,7 +1784,7 @@ fn type_def_parser() -> nibble.Parser(TypeDef, Token, b) {
 }
 
 fn sub_type_parser() -> nibble.Parser(
-  #(SubType, List(Index), CompType),
+  #(SubType, List(Index), CompType(Index)),
   Token,
   b,
 ) {
@@ -1796,7 +1807,7 @@ fn sub_type_parser() -> nibble.Parser(
   ])
 }
 
-fn comp_type_parser() -> nibble.Parser(CompType, Token, b) {
+fn comp_type_parser() -> nibble.Parser(CompType(Index), Token, b) {
   nibble.one_of([
     def_struct_parser(),
     def_array_parser(),
@@ -1804,7 +1815,7 @@ fn comp_type_parser() -> nibble.Parser(CompType, Token, b) {
   ])
 }
 
-fn def_struct_parser() -> nibble.Parser(CompType, Token, b) {
+fn def_struct_parser() -> nibble.Parser(CompType(Index), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("struct")))
   use fields <- nibble.do(
     nibble.many(field_parser()) |> nibble.map(list.flatten),
@@ -1813,14 +1824,14 @@ fn def_struct_parser() -> nibble.Parser(CompType, Token, b) {
   nibble.return(Struct(fields))
 }
 
-fn def_array_parser() -> nibble.Parser(CompType, Token, b) {
+fn def_array_parser() -> nibble.Parser(CompType(Index), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("array")))
   use ft <- nibble.do(field_type_parser())
   use _ <- nibble.do(nibble.token(RParen))
   nibble.return(Array(ft))
 }
 
-fn def_func_parser() -> nibble.Parser(CompType, Token, b) {
+fn def_func_parser() -> nibble.Parser(CompType(Index), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("func")))
   use params <- nibble.do(
     nibble.many(param_parser()) |> nibble.map(list.flatten),
@@ -1832,7 +1843,7 @@ fn def_func_parser() -> nibble.Parser(CompType, Token, b) {
   nibble.return(Func(params, results))
 }
 
-fn field_parser() -> nibble.Parser(List(Field), Token, b) {
+fn field_parser() -> nibble.Parser(List(Field(Index)), Token, b) {
   use _ <- nibble.do(nibble.token(LKeyword("field")))
   use fields <- nibble.do(
     nibble.one_of([
@@ -1851,7 +1862,7 @@ fn field_parser() -> nibble.Parser(List(Field), Token, b) {
   nibble.return(fields)
 }
 
-fn field_type_parser() -> nibble.Parser(FieldType, Token, b) {
+fn field_type_parser() -> nibble.Parser(FieldType(Index), Token, b) {
   nibble.one_of([
     {
       use _ <- nibble.do(nibble.token(LKeyword("mut")))
@@ -1868,7 +1879,7 @@ fn field_type_parser() -> nibble.Parser(FieldType, Token, b) {
   ])
 }
 
-fn storage_type_parser() -> nibble.Parser(FieldType, Token, b) {
+fn storage_type_parser() -> nibble.Parser(FieldType(Index), Token, b) {
   nibble.one_of([
     nibble.token(Keyword("i8")) |> nibble.replace(PackedField(Immutable, I8)),
     nibble.token(Keyword("i16")) |> nibble.replace(PackedField(Immutable, I16)),
@@ -2360,8 +2371,8 @@ fn type_use_parser() {
 }
 
 fn mem_instr_parser(
-  constr: fn(Index, String, String) -> Instruction,
-) -> nibble.Parser(List(Instruction), Token, a) {
+  constr: fn(Index, String, String) -> Instruction(Index),
+) -> nibble.Parser(List(Instruction(Index)), Token, a) {
   use idx <- nibble.do(nibble.optional(index_parser()))
   let idx = option.unwrap(idx, IndexInt(0))
   use offset <- nibble.do(
@@ -2525,7 +2536,7 @@ fn value_type_parser() {
   ])
 }
 
-fn ref_type_parser() -> nibble.Parser(RefType, Token, a) {
+fn ref_type_parser() -> nibble.Parser(RefType(Index), Token, a) {
   nibble.one_of([
     keyword_value_parser("anyref", Nullable(HeapAny)),
     keyword_value_parser("eqref", Nullable(HeapEq)),
@@ -2555,7 +2566,7 @@ fn full_ref_type_parser() {
   |> nibble.return
 }
 
-fn heap_type_parser() -> nibble.Parser(HeapType, Token, a) {
+fn heap_type_parser() -> nibble.Parser(HeapType(Index), Token, a) {
   nibble.one_of([
     keyword_value_parser("any", HeapAny),
     keyword_value_parser("eq", HeapEq),
@@ -2582,7 +2593,10 @@ fn keyword_value_parser(
 }
 
 /// Replace all occurrences of `IndexId` and `IndexImplicit` by `IndexInt`.
-pub fn resolve_indices(mod: Module, ctx: IdContext) -> Result(Module, String) {
+pub fn resolve_indices(
+  mod: Module(Index),
+  ctx: IdContext,
+) -> Result(Module(Int), String) {
   use types <- result.try(
     list.try_map(mod.types, fn(rec) {
       use defs <- result.map(list.try_map(rec.defs, resolve_ids_type(_, ctx)))
@@ -2623,16 +2637,19 @@ pub fn resolve_indices(mod: Module, ctx: IdContext) -> Result(Module, String) {
   )
 }
 
-fn resolve_ids_type(t: TypeDef, ctx: IdContext) -> Result(TypeDef, String) {
+fn resolve_ids_type(
+  t: TypeDef(Index),
+  ctx: IdContext,
+) -> Result(TypeDef(Int), String) {
   use super <- result.try(list.try_map(t.super, resolve_type(_, ctx)))
   use def <- result.map(resolve_ids_comp_type(t.def, ctx))
   TypeDef(..t, super:, def:)
 }
 
 fn resolve_ids_comp_type(
-  def: CompType,
+  def: CompType(Index),
   ctx: IdContext,
-) -> Result(CompType, String) {
+) -> Result(CompType(Int), String) {
   case def {
     Struct(fields:) -> {
       use fields <- result.map(list.try_map(fields, resolve_ids_field(_, ctx)))
@@ -2652,7 +2669,10 @@ fn resolve_ids_comp_type(
   }
 }
 
-fn resolve_ids_import(value: Import, ctx: IdContext) -> Result(Import, String) {
+fn resolve_ids_import(
+  value: Import(Index),
+  ctx: IdContext,
+) -> Result(Import(Int), String) {
   case value {
     ImportTag(type_:, params:, results:, ..) -> {
       use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
@@ -2665,7 +2685,8 @@ fn resolve_ids_import(value: Import, ctx: IdContext) -> Result(Import, String) {
       use value_type <- result.map(resolve_ids_value_type(value_type, ctx))
       ImportGlobal(..value, value_type:)
     }
-    ImportMemory(..) -> Ok(value)
+    ImportMemory(module_name:, import_name:, id:, address_type:, limits:) ->
+      Ok(ImportMemory(module_name:, import_name:, id:, address_type:, limits:))
     ImportTable(ref_type:, ..) -> {
       use ref_type <- result.map(resolve_ids_ref_type(ref_type, ctx))
       ImportTable(..value, ref_type:)
@@ -2680,7 +2701,10 @@ fn resolve_ids_import(value: Import, ctx: IdContext) -> Result(Import, String) {
   }
 }
 
-fn resolve_ids_tag(tag: Tag, ctx: IdContext) -> Result(Tag, String) {
+fn resolve_ids_tag(
+  tag: Tag(Index),
+  ctx: IdContext,
+) -> Result(Tag(Int), String) {
   let Tag(type_:, params:, results:, ..) = tag
   use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
     TypeUse(type_:, params:, results:),
@@ -2690,24 +2714,27 @@ fn resolve_ids_tag(tag: Tag, ctx: IdContext) -> Result(Tag, String) {
 }
 
 fn resolve_ids_global(
-  global: Global,
+  global: Global(Index),
   ctx: IdContext,
-) -> Result(Global, String) {
+) -> Result(Global(Int), String) {
   use value_type <- result.try(resolve_ids_value_type(global.value_type, ctx))
   use expr <- result.map(list.try_map(global.expr, resolve_ids_instr(_, ctx)))
   Global(..global, value_type:, expr:)
 }
 
-fn resolve_ids_table(table: Table, ctx: IdContext) -> Result(Table, String) {
+fn resolve_ids_table(
+  table: Table(Index),
+  ctx: IdContext,
+) -> Result(Table(Int), String) {
   use ref_type <- result.try(resolve_ids_ref_type(table.ref_type, ctx))
   use expr <- result.map(list.try_map(table.expr, resolve_ids_instr(_, ctx)))
   Table(..table, ref_type:, expr:)
 }
 
 fn resolve_ids_function(
-  function: Function,
+  function: Function(Index),
   ctx: IdContext,
-) -> Result(Function, String) {
+) -> Result(Function(Int), String) {
   let Function(type_:, params:, results:, locals:, expr:, ..) = function
   use TypeUse(type_:, params:, results:) <- result.try(resolve_ids_type_use(
     TypeUse(type_:, params:, results:),
@@ -2728,9 +2755,12 @@ fn resolve_ids_function(
   Function(..function, type_:, params:, results:, locals:, expr:)
 }
 
-fn resolve_ids_data(data: Data, ctx: IdContext) -> Result(Data, String) {
+fn resolve_ids_data(
+  data: Data(Index),
+  ctx: IdContext,
+) -> Result(Data(Int), String) {
   case data {
-    PassiveData(..) -> Ok(data)
+    PassiveData(id:, data:) -> Ok(PassiveData(id:, data:))
     ActiveData(memory_index:, offset:, ..) -> {
       use memory_index <- result.try(resolve_memory(memory_index, ctx))
       use offset <- result.map(resolve_ids_expr(offset, ctx))
@@ -2740,9 +2770,9 @@ fn resolve_ids_data(data: Data, ctx: IdContext) -> Result(Data, String) {
 }
 
 fn resolve_ids_element(
-  element: Element,
+  element: Element(Index),
   ctx: IdContext,
-) -> Result(Element, String) {
+) -> Result(Element(Int), String) {
   use ref_type <- result.try(resolve_ids_ref_type(element.ref_type, ctx))
   use elems <- result.try(list.try_map(element.elems, resolve_ids_expr(_, ctx)))
   case element {
@@ -2758,9 +2788,9 @@ fn resolve_ids_element(
 }
 
 fn resolve_ids_start(
-  start: Option(Start),
+  start: Option(Start(Index)),
   ctx: IdContext,
-) -> Result(Option(Start), String) {
+) -> Result(Option(Start(Int)), String) {
   case start {
     Some(Start(function_index:)) -> {
       use function_index <- result.map(resolve_function(function_index, ctx))
@@ -2771,9 +2801,9 @@ fn resolve_ids_start(
 }
 
 fn resolve_ids_export(
-  export: Export,
+  export: Export(Index),
   ctx: IdContext,
-) -> Result(Export, String) {
+) -> Result(Export(Int), String) {
   case export {
     ExportTag(name:, tag_index:) -> {
       use tag_index <- result.map(resolve_tag(tag_index, ctx))
@@ -2799,9 +2829,9 @@ fn resolve_ids_export(
 }
 
 fn resolve_ids_type_use(
-  tu: TypeUse,
+  tu: TypeUse(Index),
   ctx: IdContext,
-) -> Result(TypeUse, String) {
+) -> Result(TypeUse(Int), String) {
   use type_ <- result.try(resolve_type(tu.type_, ctx))
   use params <- result.try(list.try_map(tu.params, resolve_ids_param(_, ctx)))
   use results <- result.map(
@@ -2810,15 +2840,18 @@ fn resolve_ids_type_use(
   TypeUse(type_:, params:, results:)
 }
 
-fn resolve_ids_param(param: Param, ctx: IdContext) -> Result(Param, String) {
+fn resolve_ids_param(
+  param: Param(Index),
+  ctx: IdContext,
+) -> Result(Param(Int), String) {
   use typ <- result.map(resolve_ids_value_type(param.typ, ctx))
   Param(..param, typ:)
 }
 
 fn resolve_ids_ref_type(
-  ref_type: RefType,
+  ref_type: RefType(Index),
   ctx: IdContext,
-) -> Result(RefType, String) {
+) -> Result(RefType(Int), String) {
   use heap_type <- result.map(resolve_ids_heap_type(ref_type.heap_type, ctx))
   case ref_type {
     NonNull(..) -> NonNull(heap_type:)
@@ -2827,45 +2860,63 @@ fn resolve_ids_ref_type(
 }
 
 fn resolve_ids_heap_type(
-  heap_type: HeapType,
+  heap_type: HeapType(Index),
   ctx: IdContext,
-) -> Result(HeapType, String) {
+) -> Result(HeapType(Int), String) {
   case heap_type {
     HeapIndex(type_index) ->
       result.map(resolve_type(type_index, ctx), HeapIndex)
-    _ -> Ok(heap_type)
+    HeapAny -> HeapAny |> Ok
+    HeapEq -> HeapEq |> Ok
+    HeapI31 -> HeapI31 |> Ok
+    HeapStruct -> HeapStruct |> Ok
+    HeapArray -> HeapArray |> Ok
+    HeapNone -> HeapNone |> Ok
+    HeapFunc -> HeapFunc |> Ok
+    HeapNoFunc -> HeapNoFunc |> Ok
+    HeapExn -> HeapExn |> Ok
+    HeapNoExn -> HeapNoExn |> Ok
+    HeapExtern -> HeapExtern |> Ok
+    HeapNoExtern -> HeapNoExtern |> Ok
   }
 }
 
 fn resolve_ids_value_type(
-  value_type: ValueType,
+  value_type: ValueType(Index),
   ctx: IdContext,
-) -> Result(ValueType, String) {
+) -> Result(ValueType(Int), String) {
   case value_type {
     Ref(ref_type) -> result.map(resolve_ids_ref_type(ref_type, ctx), Ref)
-    _ -> Ok(value_type)
+    I32 -> Ok(I32)
+    I64 -> Ok(I64)
+    F32 -> Ok(F32)
+    F64 -> Ok(F64)
   }
 }
 
-fn resolve_ids_field(field: Field, ctx: IdContext) -> Result(Field, String) {
+fn resolve_ids_field(
+  field: Field(Index),
+  ctx: IdContext,
+) -> Result(Field(Int), String) {
   result.map(resolve_ids_field_type(field.field_type, ctx), Field(field.id, _))
 }
 
 fn resolve_ids_field_type(
-  field_type: FieldType,
+  field_type: FieldType(Index),
   ctx: IdContext,
-) -> Result(FieldType, String) {
+) -> Result(FieldType(Int), String) {
   case field_type {
     ValueField(mutability:, value_type:) ->
       result.map(resolve_ids_value_type(value_type, ctx), ValueField(
         mutability,
         _,
       ))
-    PackedField(..) -> Ok(field_type)
+    PackedField(mutability:, packed_type:) ->
+      Ok(PackedField(mutability:, packed_type:))
   }
 }
 
-fn resolve_ids_expr(expr: List(Instruction), ctx: IdContext) {
+fn resolve_ids_expr(expr: List(Instruction(Index)), ctx: IdContext) {
   list.try_fold(expr, #(ctx, []), fn(acc, instr) {
     let #(ctx, instrs) = acc
     use instr <- result.map(resolve_ids_instr(instr, ctx))
@@ -2882,19 +2933,22 @@ fn resolve_ids_expr(expr: List(Instruction), ctx: IdContext) {
 }
 
 fn resolve_ids_instr(
-  instr: Instruction,
+  instr: Instruction(Index),
   ctx: IdContext,
-) -> Result(Instruction, String) {
+) -> Result(Instruction(Int), String) {
   case instr {
-    Unreachable | Nop -> Ok(instr)
+    Unreachable -> Unreachable |> Ok
+    Nop -> Nop |> Ok
     Block(label:, block_type:) ->
       result.map(resolve_ids_block_type(block_type, ctx), Block(label, _))
     Loop(label:, block_type:) ->
       result.map(resolve_ids_block_type(block_type, ctx), Loop(label, _))
     If(label:, block_type:) ->
       result.map(resolve_ids_block_type(block_type, ctx), If(label, _))
-    Else(label:) -> result.replace(check_block_label(label, ctx, "else"), instr)
-    End(label:) -> result.replace(check_block_label(label, ctx, "end"), instr)
+    Else(label:) ->
+      result.replace(check_block_label(label, ctx, "else"), Else(label:))
+    End(label:) ->
+      result.replace(check_block_label(label, ctx, "end"), End(label:))
     Branch(label_index:) -> result.map(resolve_label(label_index, ctx), Branch)
     BranchIf(label_index:) ->
       result.map(resolve_label(label_index, ctx), BranchIf)
@@ -2908,7 +2962,7 @@ fn resolve_ids_instr(
       ))
       BranchTable(label_indices:, default_label_index:)
     }
-    Return -> Ok(instr)
+    Return -> Return |> Ok
     Call(function_index:) ->
       result.map(resolve_function(function_index, ctx), Call)
     CallIndirect(table_index:, type_:, params:, results:) -> {
@@ -2958,12 +3012,16 @@ fn resolve_ids_instr(
       result.map(resolve_ids_heap_type(heap_type, ctx), RefNull)
     RefFunc(function_index:) ->
       result.map(resolve_function(function_index, ctx), RefFunc)
-    RefIsNull | RefAsNonNull | RefEq -> Ok(instr)
+    RefIsNull -> RefIsNull |> Ok
+    RefAsNonNull -> RefAsNonNull |> Ok
+    RefEq -> RefEq |> Ok
     RefTest(ref_type:) ->
       result.map(resolve_ids_ref_type(ref_type, ctx), RefTest)
     RefCast(ref_type:) ->
       result.map(resolve_ids_ref_type(ref_type, ctx), RefCast)
-    RefI31 | I31GetS | I31GetU -> Ok(instr)
+    RefI31 -> RefI31 |> Ok
+    I31GetS -> I31GetS |> Ok
+    I31GetU -> I31GetU |> Ok
     StructNew(type_index:) ->
       result.map(resolve_type(type_index, ctx), StructNew)
     StructNewDefault(type_index:) ->
@@ -2997,7 +3055,7 @@ fn resolve_ids_instr(
     ArrayGetU(type_index:) ->
       result.map(resolve_type(type_index, ctx), ArrayGetU)
     ArraySet(type_index:) -> result.map(resolve_type(type_index, ctx), ArraySet)
-    ArrayLen -> Ok(instr)
+    ArrayLen -> ArrayLen |> Ok
     ArrayFill(type_index:) ->
       result.map(resolve_type(type_index, ctx), ArrayFill)
     ArrayCopy(type_index:, source_type_index:) -> {
@@ -3015,7 +3073,14 @@ fn resolve_ids_instr(
       use element_index <- result.map(resolve_element(element_index, ctx))
       ArrayInitElem(type_index, element_index)
     }
-    AnyConvertExtern | ExternConvertAny | Drop | Select(_) -> Ok(instr)
+    AnyConvertExtern -> AnyConvertExtern |> Ok
+    ExternConvertAny -> ExternConvertAny |> Ok
+    Drop -> Drop |> Ok
+    Select(value_types) ->
+      result.map(
+        list.try_map(value_types, resolve_ids_value_type(_, ctx)),
+        Select,
+      )
     LocalGet(local_index:) ->
       result.map(resolve_local(local_index, ctx), LocalGet)
     LocalSet(local_index:) ->
@@ -3111,100 +3176,113 @@ fn resolve_ids_instr(
       MemoryInit(memory_index:, data_index:)
     }
     DataDrop(data_index:) -> result.map(resolve_data(data_index, ctx), DataDrop)
-    I32Const(..) | I64Const(..) | F32Const(..) | F64Const(..) -> Ok(instr)
-    I32EqZ
-    | I32Eq
-    | I32NE
-    | I32LtS
-    | I32LtU
-    | I32GtS
-    | I32GtU
-    | I32LeS
-    | I32LeU
-    | I32GeS
-    | I32GeU -> Ok(instr)
-    I64EqZ
-    | I64Eq
-    | I64NE
-    | I64LtS
-    | I64LtU
-    | I64GtS
-    | I64GtU
-    | I64LeS
-    | I64LeU
-    | I64GeS
-    | I64GeU -> Ok(instr)
-    F32Eq | F32NE | F32Lt | F32Gt | F32Le | F32Ge -> Ok(instr)
-    F64Eq | F64NE | F64Lt | F64Gt | F64Le | F64Ge -> Ok(instr)
-    I32CntLZ
-    | I32CntTZ
-    | I32PopCnt
-    | I32Extend8S
-    | I32Extend16S
-    | I32Add
-    | I32Sub
-    | I32Mul
-    | I32DivS
-    | I32DivU
-    | I32RemS
-    | I32RemU
-    | I32And
-    | I32Or
-    | I32Xor
-    | I32ShL
-    | I32ShRS
-    | I32ShRU
-    | I32RotL
-    | I32RotR -> Ok(instr)
-    I64CntLZ
-    | I64CntTZ
-    | I64PopCnt
-    | I64Extend8S
-    | I64Extend16S
-    | I64Extend32S
-    | I64Add
-    | I64Sub
-    | I64Mul
-    | I64DivS
-    | I64DivU
-    | I64RemS
-    | I64RemU
-    | I64And
-    | I64Or
-    | I64Xor
-    | I64ShL
-    | I64ShRS
-    | I64ShRU
-    | I64RotL
-    | I64RotR -> Ok(instr)
-    F32Abs
-    | F32Neg
-    | F32Ceil
-    | F32Floor
-    | F32Trunc
-    | F32Nearest
-    | F32Sqrt
-    | F32Add
-    | F32Sub
-    | F32Mul
-    | F32Div
-    | F32Min
-    | F32Max
-    | F32CopySign -> Ok(instr)
-    F64Abs
-    | F64Neg
-    | F64Ceil
-    | F64Floor
-    | F64Trunc
-    | F64Nearest
-    | F64Sqrt
-    | F64Add
-    | F64Sub
-    | F64Mul
-    | F64Div
-    | F64Min
-    | F64Max
-    | F64CopySign -> Ok(instr)
+    I32Const(val) -> I32Const(val) |> Ok
+    I64Const(val) -> I64Const(val) |> Ok
+    F32Const(val) -> F32Const(val) |> Ok
+    F64Const(val) -> F64Const(val) |> Ok
+    I32EqZ -> I32EqZ |> Ok
+    I32Eq -> I32Eq |> Ok
+    I32NE -> I32NE |> Ok
+    I32LtS -> I32LtS |> Ok
+    I32LtU -> I32LtU |> Ok
+    I32GtS -> I32GtS |> Ok
+    I32GtU -> I32GtU |> Ok
+    I32LeS -> I32LeS |> Ok
+    I32LeU -> I32LeU |> Ok
+    I32GeS -> I32GeS |> Ok
+    I32GeU -> I32GeU |> Ok
+    I64EqZ -> I64EqZ |> Ok
+    I64Eq -> I64Eq |> Ok
+    I64NE -> I64NE |> Ok
+    I64LtS -> I64LtS |> Ok
+    I64LtU -> I64LtU |> Ok
+    I64GtS -> I64GtS |> Ok
+    I64GtU -> I64GtU |> Ok
+    I64LeS -> I64LeS |> Ok
+    I64LeU -> I64LeU |> Ok
+    I64GeS -> I64GeS |> Ok
+    I64GeU -> I64GeU |> Ok
+    F32Eq -> F32Eq |> Ok
+    F32NE -> F32NE |> Ok
+    F32Lt -> F32Lt |> Ok
+    F32Gt -> F32Gt |> Ok
+    F32Le -> F32Le |> Ok
+    F32Ge -> F32Ge |> Ok
+    F64Eq -> F64Eq |> Ok
+    F64NE -> F64NE |> Ok
+    F64Lt -> F64Lt |> Ok
+    F64Gt -> F64Gt |> Ok
+    F64Le -> F64Le |> Ok
+    F64Ge -> F64Ge |> Ok
+    I32CntLZ -> I32CntLZ |> Ok
+    I32CntTZ -> I32CntTZ |> Ok
+    I32PopCnt -> I32PopCnt |> Ok
+    I32Extend8S -> I32Extend8S |> Ok
+    I32Extend16S -> I32Extend16S |> Ok
+    I32Add -> I32Add |> Ok
+    I32Sub -> I32Sub |> Ok
+    I32Mul -> I32Mul |> Ok
+    I32DivS -> I32DivS |> Ok
+    I32DivU -> I32DivU |> Ok
+    I32RemS -> I32RemS |> Ok
+    I32RemU -> I32RemU |> Ok
+    I32And -> I32And |> Ok
+    I32Or -> I32Or |> Ok
+    I32Xor -> I32Xor |> Ok
+    I32ShL -> I32ShL |> Ok
+    I32ShRS -> I32ShRS |> Ok
+    I32ShRU -> I32ShRU |> Ok
+    I32RotL -> I32RotL |> Ok
+    I32RotR -> I32RotR |> Ok
+    I64CntLZ -> I64CntLZ |> Ok
+    I64CntTZ -> I64CntTZ |> Ok
+    I64PopCnt -> I64PopCnt |> Ok
+    I64Extend8S -> I64Extend8S |> Ok
+    I64Extend16S -> I64Extend16S |> Ok
+    I64Extend32S -> I64Extend32S |> Ok
+    I64Add -> I64Add |> Ok
+    I64Sub -> I64Sub |> Ok
+    I64Mul -> I64Mul |> Ok
+    I64DivS -> I64DivS |> Ok
+    I64DivU -> I64DivU |> Ok
+    I64RemS -> I64RemS |> Ok
+    I64RemU -> I64RemU |> Ok
+    I64And -> I64And |> Ok
+    I64Or -> I64Or |> Ok
+    I64Xor -> I64Xor |> Ok
+    I64ShL -> I64ShL |> Ok
+    I64ShRS -> I64ShRS |> Ok
+    I64ShRU -> I64ShRU |> Ok
+    I64RotL -> I64RotL |> Ok
+    I64RotR -> I64RotR |> Ok
+    F32Abs -> F32Abs |> Ok
+    F32Neg -> F32Neg |> Ok
+    F32Ceil -> F32Ceil |> Ok
+    F32Floor -> F32Floor |> Ok
+    F32Trunc -> F32Trunc |> Ok
+    F32Nearest -> F32Nearest |> Ok
+    F32Sqrt -> F32Sqrt |> Ok
+    F32Add -> F32Add |> Ok
+    F32Sub -> F32Sub |> Ok
+    F32Mul -> F32Mul |> Ok
+    F32Div -> F32Div |> Ok
+    F32Min -> F32Min |> Ok
+    F32Max -> F32Max |> Ok
+    F32CopySign -> F32CopySign |> Ok
+    F64Abs -> F64Abs |> Ok
+    F64Neg -> F64Neg |> Ok
+    F64Ceil -> F64Ceil |> Ok
+    F64Floor -> F64Floor |> Ok
+    F64Trunc -> F64Trunc |> Ok
+    F64Nearest -> F64Nearest |> Ok
+    F64Sqrt -> F64Sqrt |> Ok
+    F64Add -> F64Add |> Ok
+    F64Sub -> F64Sub |> Ok
+    F64Mul -> F64Mul |> Ok
+    F64Div -> F64Div |> Ok
+    F64Min -> F64Min |> Ok
+    F64Max -> F64Max |> Ok
+    F64CopySign -> F64CopySign |> Ok
   }
 }
 
@@ -3212,10 +3290,14 @@ fn resolve_ids_field_access(
   type_index: Index,
   field_index: Index,
   ctx: IdContext,
-  constr: fn(Index, Index) -> Instruction,
-) -> Result(Instruction, String) {
+  constr: fn(Int, Int) -> Instruction(Int),
+) -> Result(Instruction(Int), String) {
   use type_index <- result.try(resolve_type(type_index, ctx))
-  use field_index <- result.map(resolve_field(type_index, field_index, ctx))
+  use field_index <- result.map(resolve_field(
+    IndexInt(type_index),
+    field_index,
+    ctx,
+  ))
   constr(type_index, field_index)
 }
 
@@ -3235,9 +3317,9 @@ fn check_block_label(
 }
 
 fn resolve_ids_block_type(
-  block_type: BlockType,
+  block_type: BlockType(Index),
   ctx: IdContext,
-) -> Result(BlockType, String) {
+) -> Result(BlockType(Int), String) {
   case block_type {
     BlockTypeUse(type_:, params:, results:) -> {
       use TypeUse(type_:, params:, results:) <- result.map(resolve_ids_type_use(
@@ -3252,69 +3334,61 @@ fn resolve_ids_block_type(
   }
 }
 
-fn resolve_type(type_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_type(type_index: Index, ctx: IdContext) -> Result(Int, String) {
   case type_index {
-    IndexInt(_) -> Ok(type_index)
+    IndexInt(i) -> Ok(i)
     IndexId(_) -> resolve_id(type_index, ctx.types, "type")
     IndexImplicit(i) ->
       dict.get(ctx.func_types, i)
-      |> result.map(fn(i) { IndexInt(i) })
       |> result.replace_error("missing implicit func type")
   }
 }
 
-fn resolve_tag(tag_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_tag(tag_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(tag_index, ctx.tags, "tag")
 }
 
-fn resolve_global(
-  global_index: Index,
-  ctx: IdContext,
-) -> Result(Index, String) {
+fn resolve_global(global_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(global_index, ctx.globals, "global")
 }
 
-fn resolve_memory(
-  memory_index: Index,
-  ctx: IdContext,
-) -> Result(Index, String) {
+fn resolve_memory(memory_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(memory_index, ctx.memories, "memory")
 }
 
-fn resolve_table(table_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_table(table_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(table_index, ctx.tables, "table")
 }
 
 fn resolve_function(
   function_index: Index,
   ctx: IdContext,
-) -> Result(Index, String) {
+) -> Result(Int, String) {
   resolve_id(function_index, ctx.functions, "function")
 }
 
-fn resolve_data(data_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_data(data_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(data_index, ctx.datas, "data")
 }
 
 fn resolve_element(
   element_index: Index,
   ctx: IdContext,
-) -> Result(Index, String) {
+) -> Result(Int, String) {
   resolve_id(element_index, ctx.elements, "element")
 }
 
-fn resolve_local(local_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_local(local_index: Index, ctx: IdContext) -> Result(Int, String) {
   resolve_id(local_index, ctx.locals, "local")
 }
 
-fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Index, String) {
+fn resolve_label(label_index: Index, ctx: IdContext) -> Result(Int, String) {
   case label_index {
-    IndexInt(_) -> Ok(label_index)
+    IndexInt(idx) -> Ok(idx)
     IndexId(id) ->
       list.index_map(ctx.labels, fn(l, i) { #(i, l) })
       |> list.find(fn(p) { pair.second(p) == id })
       |> result.map(pair.first)
-      |> result.map(IndexInt)
       |> result.replace_error("label not found: " <> id)
     IndexImplicit(_) -> panic
   }
@@ -3324,13 +3398,13 @@ fn resolve_field(
   type_index: Index,
   field_index: Index,
   ctx: IdContext,
-) -> Result(Index, String) {
+) -> Result(Int, String) {
   let assert IndexInt(type_index) = type_index
   case field_index {
-    IndexInt(_) -> Ok(field_index)
+    IndexInt(idx) -> Ok(idx)
     IndexId(id) ->
       case dict.get(ctx.fields, #(type_index, id)) {
-        Ok(index) -> Ok(IndexInt(index))
+        Ok(idx) -> Ok(idx)
         Error(_) -> Error("field not found: " <> id)
       }
     IndexImplicit(_) -> panic
@@ -3341,12 +3415,12 @@ fn resolve_id(
   index: Index,
   ids: Dict(String, Int),
   where: String,
-) -> Result(Index, String) {
+) -> Result(Int, String) {
   case index {
-    IndexInt(_) -> Ok(index)
+    IndexInt(idx) -> Ok(idx)
     IndexId(id) ->
       case dict.get(ids, id) {
-        Ok(index) -> Ok(IndexInt(index))
+        Ok(index) -> Ok(index)
         Error(_) -> Error(where <> " not found: " <> id)
       }
     IndexImplicit(_) -> panic as { "implicit index for " <> where }
